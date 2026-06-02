@@ -9,12 +9,17 @@ async function bootstrap() {
 
   // Enable CORS
   const localhostOrigins = ['http://localhost:3000', 'http://localhost:4000', 'http://127.0.0.1:3000'];
+  const productionOrigins = ['https://phatter.vercel.app', 'https://phatter.vercel.app/'];
   const envOrigins = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(o => o.trim()) : [];
-  const allowedOrigins = [...new Set([...localhostOrigins, ...envOrigins])];
+  const allowedOrigins = [...new Set([...localhostOrigins, ...productionOrigins, ...envOrigins])];
 
   app.enableCors({
     origin: (requestOrigin, callback) => {
-      if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
+      // Normalize origin by removing trailing slash for consistent comparison
+      const normalizedOrigin = requestOrigin ? requestOrigin.replace(/\/$/, '') : '';
+      const isAllowed = !requestOrigin || allowedOrigins.some(o => o.replace(/\/$/, '') === normalizedOrigin);
+      
+      if (isAllowed) {
         callback(null, true);
       } else {
         console.warn(`CORS blocked origin: ${requestOrigin}`);
@@ -23,7 +28,6 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-client-type', 'x-device-id'],
   });
 
   // Cookie Parser
