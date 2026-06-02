@@ -8,14 +8,16 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // Enable CORS
+  const localhostOrigins = ['http://localhost:3000', 'http://localhost:4000', 'http://127.0.0.1:3000'];
+  const envOrigins = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(o => o.trim()) : [];
+  const allowedOrigins = [...new Set([...localhostOrigins, ...envOrigins])];
+
   app.enableCors({
     origin: (requestOrigin, callback) => {
-      const allowedOrigins = process.env.FRONTEND_URL
-        ? process.env.FRONTEND_URL.split(',')
-        : ['http://localhost:3000', 'http://127.0.0.1:3000'];
-      if (!requestOrigin || allowedOrigins.includes(requestOrigin) || allowedOrigins.some(o => requestOrigin.startsWith(o))) {
+      if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
         callback(null, true);
       } else {
+        console.warn(`CORS blocked origin: ${requestOrigin}`);
         callback(new Error('Not allowed by CORS'));
       }
     },
@@ -49,5 +51,6 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`Application is running on: http://localhost:${port}`);
   console.log(`Swagger documentation is available at: http://localhost:${port}/api/docs`);
+  console.log(`CORS allowed origins: ${allowedOrigins.join(', ')}`);
 }
 bootstrap();
