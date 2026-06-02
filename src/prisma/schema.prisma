@@ -1,0 +1,314 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  admin
+  member
+  viewer
+}
+
+enum UserStatus {
+  online
+  away
+  offline
+}
+
+enum ChannelType {
+  public
+  private
+  dm
+  group
+}
+
+enum ChannelMemberRole {
+  admin
+  member
+}
+
+enum MessageType {
+  text
+  file
+  task_ref
+  system
+}
+
+enum TaskStatus {
+  todo
+  in_progress
+  review
+  done
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+  urgent
+}
+
+enum ProjectStatus {
+  active
+  archived
+}
+
+enum NotificationType {
+  mention
+  task_assigned
+  task_due
+  message
+  reaction
+}
+
+enum EntityType {
+  message
+  task
+  channel
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.VarChar(36)
+  name         String     @db.VarChar(100)
+  email        String     @unique @db.VarChar(255)
+  passwordHash String     @map("password_hash") @db.VarChar(255)
+  avatarUrl    String?    @map("avatar_url") @db.VarChar(500)
+  role         UserRole   @default(member)
+  status       UserStatus @default(offline)
+  lastSeenAt   DateTime?  @map("last_seen_at") @db.DateTime(0)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.DateTime(0)
+
+  workspacesCreated  Workspace[]
+  channelsCreated    Channel[]
+  channelMemberships ChannelMember[]
+  messages           Message[]
+  messageReactions   MessageReaction[]
+  filesUploaded      File[]
+  tasksCreated       Task[]            @relation("CreatedTasks")
+  tasksAssigned      Task[]            @relation("AssignedTasks")
+  taskComments       TaskComment[]
+  projectsCreated    Project[]
+  notifications      Notification[]
+  refreshTokens      RefreshToken[]
+  messageReads       MessageRead[]
+
+  @@map("users")
+}
+
+model Workspace {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  name      String   @db.VarChar(150)
+  slug      String   @unique @db.VarChar(100)
+  logoUrl   String?  @map("logo_url") @db.VarChar(500)
+  createdBy String   @map("created_by") @db.VarChar(36)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  creator   User      @relation(fields: [createdBy], references: [id])
+  channels  Channel[]
+  projects  Project[]
+
+  @@map("workspaces")
+}
+
+model Channel {
+  id          String      @id @default(uuid()) @db.VarChar(36)
+  workspaceId String      @map("workspace_id") @db.VarChar(36)
+  name        String      @db.VarChar(100)
+  description String?     @db.Text
+  type        ChannelType
+  createdBy   String      @map("created_by") @db.VarChar(36)
+  dmKey       String?     @unique @map("dm_key") @db.VarChar(100)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.DateTime(0)
+  deletedAt   DateTime?   @map("deleted_at") @db.DateTime(0)
+
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id])
+  creator     User            @relation(fields: [createdBy], references: [id])
+  members     ChannelMember[]
+  messages    Message[]
+  files       File[]
+  messageReads MessageRead[]
+  tasks       Task[]
+  projects    Project[]
+
+  @@map("channels")
+}
+
+model ChannelMember {
+  id        String            @id @default(uuid()) @db.VarChar(36)
+  channelId String            @map("channel_id") @db.VarChar(36)
+  userId    String            @map("user_id") @db.VarChar(36)
+  role      ChannelMemberRole
+  joinedAt  DateTime          @default(now()) @map("joined_at") @db.DateTime(0)
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@map("channel_members")
+}
+
+model Message {
+  id        String      @id @default(uuid()) @db.VarChar(36)
+  channelId String      @map("channel_id") @db.VarChar(36)
+  userId    String      @map("user_id") @db.VarChar(36)
+  content   String      @db.Text
+  type      MessageType
+  parentId  String?     @map("parent_id") @db.VarChar(36)
+  isPinned  Boolean     @default(false) @map("is_pinned")
+  editedAt  DateTime?   @map("edited_at") @db.DateTime(0)
+  createdAt DateTime    @default(now()) @map("created_at") @db.DateTime(0)
+  deletedAt DateTime?   @map("deleted_at") @db.DateTime(0)
+
+  channel          Channel           @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user             User              @relation(fields: [userId], references: [id])
+  parent           Message?          @relation("MessageThreads", fields: [parentId], references: [id], onDelete: Cascade)
+  replies          Message[]         @relation("MessageThreads")
+  messageReactions MessageReaction[]
+  files            File[]
+
+  @@map("messages")
+}
+
+model MessageReaction {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  messageId String   @map("message_id") @db.VarChar(36)
+  userId    String   @map("user_id") @db.VarChar(36)
+  emoji     String   @db.VarChar(10)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@map("message_reactions")
+}
+
+model File {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  messageId   String?  @map("message_id") @db.VarChar(36)
+  channelId   String   @map("channel_id") @db.VarChar(36)
+  uploaderId  String   @map("uploader_id") @db.VarChar(36)
+  name        String   @db.VarChar(255)
+  s3Key       String   @map("s3_key") @db.VarChar(500)
+  cdnUrl      String   @map("cdn_url") @db.VarChar(500)
+  mimeType    String   @map("mime_type") @db.VarChar(100)
+  sizeBytes   BigInt   @map("size_bytes")
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  message  Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  channel  Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  uploader User     @relation(fields: [uploaderId], references: [id])
+
+  @@map("files")
+}
+
+model Task {
+  id              String       @id @default(uuid()) @db.VarChar(36)
+  channelId       String       @map("channel_id") @db.VarChar(36)
+  projectId       String?      @map("project_id") @db.VarChar(36)
+  createdBy       String       @map("created_by") @db.VarChar(36)
+  assignedTo      String?      @map("assigned_to") @db.VarChar(36)
+  title           String       @db.VarChar(500)
+  description     String?      @db.Text
+  status          TaskStatus
+  priority        TaskPriority
+  dueDate         DateTime?    @map("due_date") @db.Date
+  position        Int
+  voiceTranscript String?      @map("voice_transcript") @db.Text
+  aiSuggested     Boolean      @map("ai_suggested")
+  createdAt       DateTime     @default(now()) @map("created_at") @db.DateTime(0)
+  updatedAt       DateTime     @updatedAt @map("updated_at") @db.DateTime(0)
+  deletedAt       DateTime?    @map("deleted_at") @db.DateTime(0)
+
+  channel      Channel       @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  project      Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  creator      User          @relation("CreatedTasks", fields: [createdBy], references: [id])
+  assignee     User?         @relation("AssignedTasks", fields: [assignedTo], references: [id], onDelete: SetNull)
+  taskComments TaskComment[]
+
+  @@map("tasks")
+}
+
+model TaskComment {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  taskId    String   @map("task_id") @db.VarChar(36)
+  userId    String   @map("user_id") @db.VarChar(36)
+  content   String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("task_comments")
+}
+
+model Project {
+  id            String        @id @default(uuid()) @db.VarChar(36)
+  workspaceId   String        @map("workspace_id") @db.VarChar(36)
+  channelId     String?       @map("channel_id") @db.VarChar(36)
+  name          String        @db.VarChar(200)
+  description   String?       @db.Text
+  color         String        @db.VarChar(7)
+  status        ProjectStatus
+  dueDate       DateTime?     @map("due_date") @db.Date
+  securityLevel String        @default("Standard (Internal)") @map("security_level") @db.VarChar(50)
+  createdBy     String        @map("created_by") @db.VarChar(36)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.DateTime(0)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  channel   Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  creator   User      @relation(fields: [createdBy], references: [id])
+  tasks     Task[]
+
+  @@map("projects")
+}
+
+model Notification {
+  id        String           @id @default(uuid()) @db.VarChar(36)
+  userId    String           @map("user_id") @db.VarChar(36)
+  type      NotificationType
+  refType   EntityType       @map("ref_type")
+  refId     String           @map("ref_id") @db.VarChar(36)
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at") @db.DateTime(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  userId    String    @map("user_id") @db.VarChar(36)
+  deviceId  String?   @map("device_id") @db.VarChar(100)
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.DateTime(0)
+  createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  revokedAt DateTime? @map("revoked_at") @db.DateTime(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([tokenHash])
+  @@map("refresh_tokens")
+}
+
+model MessageRead {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  userId     String   @map("user_id") @db.VarChar(36)
+  channelId  String   @map("channel_id") @db.VarChar(36)
+  lastReadAt DateTime @default(now()) @map("last_read_at") @db.DateTime(0)
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel    Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
+  @@map("message_reads")
+}

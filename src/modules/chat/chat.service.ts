@@ -1,0 +1,1172 @@
+import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+
+@Injectable()
+export class ChatService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  // Ensures a default workspace exists in the system to satisfy DB foreign keys
+  async ensureDefaultWorkspace(userId: string): Promise<string> {
+    const existing = await this.prisma.client.workspace.findFirst();
+    if (existing) {
+      return existing.id;
+    }
+    const workspace = await this.prisma.client.workspace.create({
+      data: {
+        name: 'Default Workspace',
+        slug: 'default-workspace',
+        createdBy: userId,
+      },
+    });
+    return workspace.id;
+  }
+
+  async ensureDefaultChannels(workspaceId: string, userId: string): Promise<void> {
+    const mockUsers = [
+      {
+        email: 'sarah.jenkins@collabhq.com',
+        name: 'Sarah Jenkins',
+        avatarUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuA7GMq0sMHM58XltYyz0GfvxT-Vg0x-DUjmSNLIu5J_vqVDLKNs2NCNoJQKPMBQqGPWfKU2nhs_lgf0Zng8GZpcvHFBsAa9aqYaGhFu5FiX1dllC8jRa1ZLvpTgfDDHwDyTOOtmj4P8Z17lPDGautCcmoXnNjHbGWxI41N6P-5q76MYBLPG-etgI-na5_xnHuAhLTkST9q1GtKWKlAqnDQLHrS6nWU-QwopacgWBjgpIDYDQyQiwbB5FrMC4yv25Mm8S3N3Lh8v0Ei4',
+        role: 'member',
+        passwordHash: '$2b$10$nSSDcSkbW5Gv/LzG/D/fyeaM5Z9lO5N.tF.32a.1P/6tBebpBvjLq',
+      },
+      {
+        email: 'marcus.chen@collabhq.com',
+        name: 'Marcus Chen',
+        avatarUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuA2LfVxovcRokOAhHFoeZugJvcqrXq7zHW-c0WbQcrVXwoqIgA_brAB-kC0UaTUva4dUvMWl71XOa3kT7dGt8ptso2c58ClgPi4luU6W7ZfJnIok5YhrwG5sR6TWzzysaLMqFpyGLOsa7-spUB3kOMXQEc3z213wTwdrdi1EYncngL1TRqLvELJuYHxw5xZOk2DcDFcdl9Metkt8SvmqDuSCHOHPWOC1biNnclukBCeiXNyXbjczgFacr0Aq-HGoSeW9jgsJyB21WPP',
+        role: 'member',
+        passwordHash: '$2b$10$nSSDcSkbW5Gv/LzG/D/fyeaM5Z9lO5N.tF.32a.1P/6tBebpBvjLq',
+      },
+    ];
+
+    for (const u of mockUsers) {
+      const exists = await this.prisma.client.user.findUnique({ where: { email: u.email } });
+      if (!exists) {
+        await this.prisma.client.user.create({
+          data: {
+            email: u.email,
+            name: u.name,
+            avatarUrl: u.avatarUrl,
+            role: u.role as any,
+            passwordHash: u.passwordHash,
+          },
+        });
+      }
+    }
+
+    const defaultChannels = [
+      { name: 'general', description: 'General announcements and chit-chat' },
+      { name: 'product-design', description: 'Product design discussions' },
+      { name: 'engineering', description: 'Technical development and code chat' },
+    ];
+
+    const allUsers = await this.prisma.client.user.findMany({ select: { id: true } });
+
+    for (const ch of defaultChannels) {
+      let channel = await this.prisma.client.channel.findFirst({
+        where: { workspaceId, name: ch.name },
+      });
+
+      if (!channel) {
+        channel = await this.prisma.client.channel.create({
+          data: {
+            workspaceId,
+            name: ch.name,
+            description: ch.description,
+            type: 'public',
+            createdBy: userId,
+          },
+        });
+      }
+
+      for (const u of allUsers) {
+        const isMember = await this.prisma.client.channelMember.findUnique({
+          where: { channelId_userId: { channelId: channel.id, userId: u.id } },
+        });
+        if (!isMember) {
+          await this.prisma.client.channelMember.create({
+            data: {
+              channelId: channel.id,
+              userId: u.id,
+              role: 'member',
+            },
+          });
+        }
+      }
+
+      if (ch.name === 'product-design') {
+        const msgCount = await this.prisma.client.message.count({ where: { channelId: channel.id } });
+        if (msgCount === 0) {
+          const sarah = await this.prisma.client.user.findUnique({ where: { email: 'sarah.jenkins@collabhq.com' } });
+          const marcus = await this.prisma.client.user.findUnique({ where: { email: 'marcus.chen@collabhq.com' } });
+
+          if (sarah && marcus) {
+            const baseTime = Date.now();
+            const parentMsg = await this.prisma.client.message.create({
+              data: {
+                channelId: channel.id,
+                userId: sarah.id,
+                content: `Hey team, initiating discussion on Design System v2. We need to align on the core visual tokens before engineering starts implementation next sprint. 🎨\n\nKey focus areas:\n- Refining the graphite/dark mode contrast ratios.\n- Standardizing the 8px baseline grid across all major components.\n- Updating the typography scale for better mobile legibility.\n\nPlease drop your thoughts or link your Figma drafts below.`,
+                type: 'text',
+                createdAt: new Date(baseTime - 3 * 60 * 1000),
+              },
+            });
+
+            await this.prisma.client.file.create({
+              data: {
+                messageId: parentMsg.id,
+                channelId: channel.id,
+                uploaderId: sarah.id,
+                name: 'Tokens_v2_Draft.fig',
+                s3Key: 'tokens_v2_draft.fig',
+                cdnUrl: 'https://figma.com/file/tokens_v2_draft',
+                mimeType: 'application/octet-stream',
+                sizeBytes: 1572864,
+                createdAt: new Date(baseTime - 3 * 60 * 1000),
+              },
+            });
+
+            await this.prisma.client.message.create({
+              data: {
+                channelId: channel.id,
+                userId: marcus.id,
+                content: `I reviewed the Figma draft. The contrast ratios on the primary buttons (Slate Blue on Z-1 surface) look a bit tight against WCAG AAA standards. We might need to bump the brightness of the text or deepen the button fill slightly.`,
+                type: 'text',
+                parentId: parentMsg.id,
+                createdAt: new Date(baseTime - 2 * 60 * 1000),
+              },
+            });
+
+            await this.prisma.client.message.create({
+              data: {
+                channelId: channel.id,
+                userId: userId,
+                content: `Agreed with Marcus on the contrast. I've updated the \`text-on-primary\` token to absolute white (#FFFFFF) instead of the off-white to ensure we hit the 7:1 ratio. I've also pushed a PR to the token repo for the web implementation.`,
+                type: 'text',
+                parentId: parentMsg.id,
+                createdAt: new Date(baseTime - 1 * 60 * 1000),
+              },
+            });
+          }
+        }
+
+        const taskCount = await this.prisma.client.task.count({ where: { channelId: channel.id } });
+        if (taskCount === 0) {
+          const sarah = await this.prisma.client.user.findUnique({ where: { email: 'sarah.jenkins@collabhq.com' } });
+          const marcus = await this.prisma.client.user.findUnique({ where: { email: 'marcus.chen@collabhq.com' } });
+
+          if (sarah && marcus) {
+            await this.prisma.client.task.createMany({
+              data: [
+                {
+                  channelId: channel.id,
+                  createdBy: sarah.id,
+                  assignedTo: marcus.id,
+                  title: 'Finalize typography scale for mobile breakpoints',
+                  status: 'todo',
+                  priority: 'high',
+                  position: 0,
+                  aiSuggested: false,
+                },
+                {
+                  channelId: channel.id,
+                  createdBy: sarah.id,
+                  assignedTo: sarah.id,
+                  title: 'Audit existing color tokens against WCAG AAA',
+                  status: 'todo',
+                  priority: 'medium',
+                  dueDate: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000),
+                  position: 1,
+                  aiSuggested: false,
+                },
+                {
+                  channelId: channel.id,
+                  createdBy: marcus.id,
+                  title: 'Draft interaction guidelines for dropdown menus',
+                  status: 'todo',
+                  priority: 'low',
+                  position: 2,
+                  aiSuggested: false,
+                },
+              ],
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Validates server-side if a user is a member of a channel
+  async validateMembership(channelId: string, userId: string) {
+    const member = await this.prisma.client.channelMember.findUnique({
+      where: {
+        channelId_userId: { channelId, userId },
+      },
+    });
+    if (!member) {
+      throw new ForbiddenException('You are not a member of this channel');
+    }
+    return member;
+  }
+
+  // Searches users within the same workspace to prevent global scraping
+  async searchUsers(query: string, currentUserId: string) {
+    const hasQuery = query && query.trim().length >= 3;
+
+    // 1. Find all workspaces the current user is associated with
+    const createdWorkspaces = await this.prisma.client.workspace.findMany({
+      where: { createdBy: currentUserId },
+      select: { id: true },
+    });
+    const createdIds = createdWorkspaces.map((w) => w.id);
+
+    const channelMemberships = await this.prisma.client.channelMember.findMany({
+      where: { userId: currentUserId },
+      select: {
+        channel: {
+          select: { workspaceId: true },
+        },
+      },
+    });
+    const channelIds = channelMemberships.map((m) => m.channel.workspaceId);
+
+    const workspaceIds = Array.from(new Set([...createdIds, ...channelIds]));
+
+    // If user is not in any workspace, ensure/create default one
+    if (workspaceIds.length === 0) {
+      const defaultId = await this.ensureDefaultWorkspace(currentUserId);
+      workspaceIds.push(defaultId);
+    }
+
+    // 2. Search for users who are also in those workspaces (or generally in the system if it's default)
+    // To ensure a collaborative flow, we also fallback to searching all users if workspaces are default
+    const isOnlyDefault = workspaceIds.length === 1;
+
+    const whereClause: any = {
+      AND: [
+        { id: { not: currentUserId } },
+      ],
+    };
+
+    if (hasQuery) {
+      whereClause.AND.push({
+        OR: [
+          { name: { contains: query } },
+          { email: { contains: query } },
+        ],
+      });
+    }
+
+    if (!isOnlyDefault) {
+      whereClause.AND.push({
+        OR: [
+          { workspacesCreated: { any: { id: { in: workspaceIds } } } },
+          { channelMemberships: { any: { channel: { workspaceId: { in: workspaceIds } } } } },
+        ],
+      });
+    }
+
+    return this.prisma.client.user.findMany({
+      where: whereClause,
+      take: 15,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatarUrl: true,
+        role: true,
+        status: true,
+      },
+    });
+  }
+
+  // Returns or creates a deterministic DM channel between two users
+  async getOrCreateDMChannel(userAId: string, userBId: string) {
+    const dmKey = [userAId, userBId].sort().join('_');
+
+    // Check if DM exists
+    let channel = await this.prisma.client.channel.findUnique({
+      where: { dmKey },
+      include: {
+        members: {
+          include: {
+            user: true,
+          },
+        },
+      },
+    });
+
+    if (channel) {
+      return channel;
+    }
+
+    const workspaceId = await this.ensureDefaultWorkspace(userAId);
+
+    try {
+      channel = await this.prisma.client.channel.create({
+        data: {
+          workspaceId,
+          name: `DM_${dmKey}`,
+          type: 'dm',
+          createdBy: userAId,
+          dmKey,
+          members: {
+            create: [
+              { userId: userAId, role: 'member' },
+              { userId: userBId, role: 'member' },
+            ],
+          },
+        },
+        include: {
+          members: {
+            include: {
+              user: true,
+            },
+          },
+        },
+      });
+    } catch (err: any) {
+      // Fallback for database race conditions (P2002 represents Unique constraint violation in Prisma)
+      if (err.code === 'P2002') {
+        const fallback = await this.prisma.client.channel.findUnique({
+          where: { dmKey },
+          include: {
+            members: {
+              include: {
+                user: true,
+              },
+            },
+          },
+        });
+        if (fallback) return fallback;
+      }
+      throw err;
+    }
+
+    return channel;
+  }
+
+  // Fetches all conversations/channels for a user
+  async getConversations(userId: string, inMemoryOnlineUsers: Set<string>) {
+    const workspaceId = await this.ensureDefaultWorkspace(userId);
+    await this.ensureDefaultChannels(workspaceId, userId);
+
+    const memberships = await this.prisma.client.channelMember.findMany({
+      where: { userId },
+      include: {
+        channel: {
+          include: {
+            members: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    avatarUrl: true,
+                    role: true,
+                    status: true,
+                  },
+                },
+              },
+            },
+            messages: {
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    const conversations = await Promise.all(
+      memberships.map(async (m) => {
+        const channel = m.channel;
+        const lastMessageRecord = channel.messages[0] || null;
+
+        // Calculate unread count
+        const lastReadRecord = await this.prisma.client.messageRead.findUnique({
+          where: {
+            userId_channelId: { userId, channelId: channel.id },
+          },
+        });
+
+        const unreadCount = await this.prisma.client.message.count({
+          where: {
+            channelId: channel.id,
+            createdAt: {
+              gt: lastReadRecord ? lastReadRecord.lastReadAt : new Date(0),
+            },
+            userId: { not: userId }, // do not count own messages as unread
+          },
+        });
+
+        // Determine names and avatars based on DM vs Group
+        let name = channel.name;
+        let avatar: string | null = null;
+        let role = '';
+        let statusText = '';
+        let isOnline = false;
+
+        if (channel.type === 'dm') {
+          const otherMember = channel.members.find((member) => member.userId !== userId);
+          if (otherMember && otherMember.user) {
+            name = otherMember.user.name;
+            avatar = otherMember.user.avatarUrl;
+            role = otherMember.user.role || '';
+            isOnline = inMemoryOnlineUsers.has(otherMember.userId);
+            statusText = isOnline ? 'Active now' : 'Offline';
+          }
+        }
+
+        // Get initials for display fallback
+        const initials = name
+          .split(' ')
+          .map((n) => n[0])
+          .join('')
+          .toUpperCase()
+          .slice(0, 2);
+
+        return {
+          id: channel.id,
+          name,
+          avatar,
+          initials,
+          role,
+          statusText,
+          type: channel.type === 'dm' ? 'direct' : channel.type === 'group' ? 'group' : 'channel',
+          lastMessage: lastMessageRecord ? lastMessageRecord.content : '',
+          lastMessageTime: lastMessageRecord
+            ? new Date(lastMessageRecord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '',
+          lastMessageAt: lastMessageRecord
+            ? lastMessageRecord.createdAt.toISOString()
+            : channel.createdAt.toISOString(),
+          unreadCount,
+          isOnline,
+          participants: channel.members.map((member) => ({
+            name: member.user.name,
+            avatar: member.user.avatarUrl || undefined,
+            initials: member.user.name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2),
+            role: member.user.role || '',
+            isOnline: inMemoryOnlineUsers.has(member.userId),
+          })),
+        };
+      }),
+    );
+
+    // Sort by latest message or creation time
+    return conversations.sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
+  }
+
+  // Cursor-based message pagination to prevent memory bloating
+  async getMessages(channelId: string, userId: string, cursor?: string, limit = 20) {
+    await this.validateMembership(channelId, userId);
+
+    const rawMessages = await this.prisma.client.message.findMany({
+      where: { channelId },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1, // Fetch 1 extra to check if there is more data
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+          },
+        },
+        files: true,
+        messageReactions: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const hasMore = rawMessages.length > limit;
+    const messagesToReturn = hasMore ? rawMessages.slice(0, limit) : rawMessages;
+
+    // The cursor for the next page is the ID of the oldest message in the set
+    const nextCursor = messagesToReturn.length > 0 ? messagesToReturn[messagesToReturn.length - 1].id : null;
+
+    const formatBytes = (bytes: number) => {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    };
+
+    // Map to frontend message structure (reverse to restore chronological order)
+    const formattedMessages = messagesToReturn
+      .map((msg) => {
+        const file = msg.files[0] || null;
+
+        // Group reactions by emoji
+        const reactionGroupMap = new Map<string, { emoji: string; count: number; users: string[]; hasReacted: boolean }>();
+        for (const rx of msg.messageReactions || []) {
+          const key = rx.emoji;
+          if (!reactionGroupMap.has(key)) {
+            reactionGroupMap.set(key, {
+              emoji: key,
+              count: 0,
+              users: [],
+              hasReacted: false,
+            });
+          }
+          const group = reactionGroupMap.get(key)!;
+          group.count += 1;
+          group.users.push(rx.user.name);
+          if (rx.userId === userId) {
+            group.hasReacted = true;
+          }
+        }
+
+        return {
+          id: msg.id,
+          text: msg.content,
+          senderName: msg.user.name,
+          senderAvatar: msg.user.avatarUrl || undefined,
+          timestamp: new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isSelf: msg.userId === userId,
+          parentId: msg.parentId || undefined,
+          isPinned: msg.isPinned,
+          reactions: Array.from(reactionGroupMap.values()),
+          attachment: file ? {
+            name: file.name,
+            size: formatBytes(Number(file.sizeBytes)),
+            type: file.mimeType.includes('pdf') ? 'pdf' : file.mimeType.includes('image') ? 'image' : 'other',
+          } : undefined,
+        };
+      })
+      .reverse();
+
+    return {
+      messages: formattedMessages,
+      nextCursor,
+      hasMore,
+    };
+  }
+
+  // Saves a new message to the database
+  async saveMessage(channelId: string, senderId: string, content: string, parentId?: string) {
+    await this.validateMembership(channelId, senderId);
+
+    const message = await this.prisma.client.message.create({
+      data: {
+        channelId,
+        userId: senderId,
+        content,
+        type: 'text',
+        parentId: parentId || null,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
+
+    // Update the message_reads for the sender automatically
+    await this.updateLastRead(channelId, senderId);
+
+    return message;
+  }
+
+  // Updates the read pointer for the user on a channel
+  async updateLastRead(channelId: string, userId: string) {
+    await this.validateMembership(channelId, userId);
+
+    return this.prisma.client.messageRead.upsert({
+      where: {
+        userId_channelId: { userId, channelId },
+      },
+      update: {
+        lastReadAt: new Date(),
+      },
+      create: {
+        userId,
+        channelId,
+        lastReadAt: new Date(),
+      },
+    });
+  }
+
+  // --- TASK MANAGEMENT ENDPOINTS ---
+
+  async getTasks(channelId: string, userId: string) {
+    await this.validateMembership(channelId, userId);
+    return this.prisma.client.task.findMany({
+      where: { channelId, deletedAt: null },
+      orderBy: { position: 'asc' },
+      include: {
+        assignee: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+            email: true,
+          },
+        },
+      },
+    });
+  }
+
+  async createTask(
+    channelId: string,
+    creatorId: string,
+    body: { title: string; priority: string; assignedToEmail?: string; dueDate?: string },
+  ) {
+    await this.validateMembership(channelId, creatorId);
+
+    let assigneeId: string | undefined = undefined;
+    if (body.assignedToEmail) {
+      const user = await this.prisma.client.user.findUnique({
+        where: { email: body.assignedToEmail },
+      });
+      if (user) assigneeId = user.id;
+    }
+
+    const maxTask = await this.prisma.client.task.findFirst({
+      where: { channelId },
+      orderBy: { position: 'desc' },
+    });
+    const position = maxTask ? maxTask.position + 1 : 0;
+
+    return this.prisma.client.task.create({
+      data: {
+        channelId,
+        createdBy: creatorId,
+        title: body.title,
+        status: 'todo',
+        priority: (body.priority || 'medium') as any,
+        dueDate: body.dueDate ? new Date(body.dueDate) : null,
+        assignedTo: assigneeId,
+        position,
+        aiSuggested: false,
+      },
+      include: {
+        assignee: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+            email: true,
+          },
+        },
+      },
+    });
+  }
+
+  async updateTask(
+    taskId: string,
+    userId: string,
+    body: { status?: string; title?: string; priority?: string; assignedTo?: string },
+  ) {
+    const task = await this.prisma.client.task.findUnique({
+      where: { id: taskId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+    await this.validateMembership(task.channelId, userId);
+
+    const updateData: any = {};
+    if (body.status !== undefined) updateData.status = body.status;
+    if (body.title !== undefined) updateData.title = body.title;
+    if (body.priority !== undefined) updateData.priority = body.priority;
+    if (body.assignedTo !== undefined) updateData.assignedTo = body.assignedTo;
+
+    return this.prisma.client.task.update({
+      where: { id: taskId },
+      data: updateData,
+      include: {
+        assignee: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+            email: true,
+          },
+        },
+      },
+    });
+  }
+
+  async createChannel(
+    userId: string,
+    body: { name: string; description?: string; type: 'public' | 'private'; memberIds?: string[] },
+  ) {
+    const workspaceId = await this.ensureDefaultWorkspace(userId);
+    
+    const channel = await this.prisma.client.channel.create({
+      data: {
+        workspaceId,
+        name: body.name,
+        description: body.description || null,
+        type: body.type,
+        createdBy: userId,
+        members: {
+          create: {
+            userId,
+            role: 'admin',
+          },
+        },
+      },
+    });
+
+    if (body.memberIds && body.memberIds.length > 0) {
+      const uniqueMemberIds = Array.from(new Set(body.memberIds.filter(id => id !== userId)));
+      if (uniqueMemberIds.length > 0) {
+        await this.prisma.client.channelMember.createMany({
+          data: uniqueMemberIds.map((memberId) => ({
+            channelId: channel.id,
+            userId: memberId,
+            role: 'member',
+          })),
+          skipDuplicates: true,
+        });
+      }
+    }
+
+    return this.prisma.client.channel.findUnique({
+      where: { id: channel.id },
+      include: {
+        members: {
+          include: {
+            user: true,
+          },
+        },
+      },
+    });
+  }
+
+  async createGroupChat(userId: string, body: { name: string; memberIds: string[] }) {
+    const workspaceId = await this.ensureDefaultWorkspace(userId);
+
+    const channel = await this.prisma.client.channel.create({
+      data: {
+        workspaceId,
+        name: body.name,
+        type: 'group',
+        createdBy: userId,
+        members: {
+          create: {
+            userId,
+            role: 'admin',
+          },
+        },
+      },
+    });
+
+    const uniqueMemberIds = Array.from(new Set(body.memberIds.filter(id => id !== userId)));
+    if (uniqueMemberIds.length > 0) {
+      await this.prisma.client.channelMember.createMany({
+        data: uniqueMemberIds.map((memberId) => ({
+          channelId: channel.id,
+          userId: memberId,
+          role: 'member',
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return this.prisma.client.channel.findUnique({
+      where: { id: channel.id },
+      include: {
+        members: {
+          include: {
+            user: true,
+          },
+        },
+      },
+    });
+  }
+
+  async addMembersToChannel(userId: string, channelId: string, memberIds: string[]) {
+    const channel = await this.prisma.client.channel.findUnique({
+      where: { id: channelId },
+    });
+    if (!channel) {
+      throw new NotFoundException('Channel not found');
+    }
+
+    await this.validateMembership(channelId, userId);
+
+    const uniqueMemberIds = Array.from(new Set(memberIds));
+    if (uniqueMemberIds.length > 0) {
+      await this.prisma.client.channelMember.createMany({
+        data: uniqueMemberIds.map((id) => ({
+          channelId,
+          userId: id,
+          role: 'member',
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return this.prisma.client.channel.findUnique({
+      where: { id: channelId },
+      include: {
+        members: {
+          include: {
+            user: true,
+          },
+        },
+      },
+    });
+  }
+
+  async toggleMessagePin(messageId: string, userId: string) {
+    const message = await this.prisma.client.message.findUnique({
+      where: { id: messageId },
+    });
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+    await this.validateMembership(message.channelId, userId);
+
+    const updated = await this.prisma.client.message.update({
+      where: { id: messageId },
+      data: { isPinned: !message.isPinned },
+    });
+
+    return updated;
+  }
+
+  async toggleMessageReaction(messageId: string, userId: string, emoji: string) {
+    const message = await this.prisma.client.message.findUnique({
+      where: { id: messageId },
+    });
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+    await this.validateMembership(message.channelId, userId);
+
+    const existing = await this.prisma.client.messageReaction.findUnique({
+      where: {
+        messageId_userId_emoji: {
+          messageId,
+          userId,
+          emoji,
+        },
+      },
+    });
+
+    if (existing) {
+      await this.prisma.client.messageReaction.delete({
+        where: { id: existing.id },
+      });
+    } else {
+      await this.prisma.client.messageReaction.create({
+        data: {
+          messageId,
+          userId,
+          emoji,
+        },
+      });
+    }
+
+    // Return the updated reactions grouped by emoji
+    const allReactions = await this.prisma.client.messageReaction.findMany({
+      where: { messageId },
+      include: {
+        user: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    });
+
+    const reactionGroupMap = new Map<string, { emoji: string; count: number; users: string[]; hasReacted: boolean }>();
+    for (const rx of allReactions) {
+      const key = rx.emoji;
+      if (!reactionGroupMap.has(key)) {
+        reactionGroupMap.set(key, {
+          emoji: key,
+          count: 0,
+          users: [],
+          hasReacted: false,
+        });
+      }
+      const group = reactionGroupMap.get(key)!;
+      group.count += 1;
+      group.users.push(rx.user.name);
+      if (rx.userId === userId) {
+        group.hasReacted = true;
+      }
+    }
+
+    return {
+      channelId: message.channelId,
+      reactions: Array.from(reactionGroupMap.values()),
+    };
+  }
+
+  // --- PROJECT MANAGEMENT SERVICES ---
+
+  async getProjects(userId: string) {
+    const workspaceId = await this.ensureDefaultWorkspace(userId);
+
+    const projects = await this.prisma.client.project.findMany({
+      where: { workspaceId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        creator: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatarUrl: true,
+          },
+        },
+        channel: {
+          include: {
+            members: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    avatarUrl: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        tasks: {
+          where: { deletedAt: null },
+          select: {
+            id: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    return projects.map((p) => {
+      const totalTasks = p.tasks.length;
+      const completedTasks = p.tasks.filter((t) => t.status === 'done').length;
+      const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+      const members = p.channel
+        ? p.channel.members.map((m) => ({
+            id: m.user.id,
+            name: m.user.name,
+            email: m.user.email,
+            avatarUrl: m.user.avatarUrl,
+          }))
+        : [];
+
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        color: p.color,
+        status: p.status,
+        dueDate: p.dueDate ? p.dueDate.toISOString() : null,
+        securityLevel: p.securityLevel,
+        createdAt: p.createdAt.toISOString(),
+        progress,
+        totalTasks,
+        completedTasks,
+        members,
+        channelId: p.channelId,
+        creator: p.creator,
+      };
+    });
+  }
+
+  async createProject(
+    userId: string,
+    body: { name: string; description?: string; dueDate?: string; securityLevel?: string; invitedEmails?: string[] },
+  ) {
+    const workspaceId = await this.ensureDefaultWorkspace(userId);
+
+    const invitedUsers: any[] = [];
+    if (body.invitedEmails && body.invitedEmails.length > 0) {
+      const users = await this.prisma.client.user.findMany({
+        where: { email: { in: body.invitedEmails } },
+      });
+      invitedUsers.push(...users);
+    }
+
+    const allMemberIds = Array.from(
+      new Set([userId, ...invitedUsers.map((u) => u.id)]),
+    );
+
+    const channelName = `project-${body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const channel = await this.prisma.client.channel.create({
+      data: {
+        workspaceId,
+        name: channelName,
+        description: body.description || `Discussion channel for project ${body.name}`,
+        type: 'private',
+        createdBy: userId,
+        members: {
+          create: allMemberIds.map((mId) => ({
+            userId: mId,
+            role: mId === userId ? 'admin' : 'member',
+          })),
+        },
+      },
+      include: {
+        members: {
+          include: {
+            user: true,
+          },
+        },
+      },
+    });
+
+    const project = await this.prisma.client.project.create({
+      data: {
+        workspaceId,
+        channelId: channel.id,
+        name: body.name,
+        description: body.description || null,
+        color: '#3250d5',
+        status: 'active',
+        dueDate: body.dueDate ? new Date(body.dueDate) : null,
+        securityLevel: body.securityLevel || 'Standard (Internal)',
+        createdBy: userId,
+      },
+      include: {
+        creator: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
+
+    return {
+      id: project.id,
+      name: project.name,
+      description: project.description,
+      color: project.color,
+      status: project.status,
+      dueDate: project.dueDate ? project.dueDate.toISOString() : null,
+      securityLevel: project.securityLevel,
+      createdAt: project.createdAt.toISOString(),
+      progress: 0,
+      totalTasks: 0,
+      completedTasks: 0,
+      members: channel.members.map((m) => ({
+        id: m.user.id,
+        name: m.user.name,
+        email: m.user.email,
+        avatarUrl: m.user.avatarUrl,
+      })),
+      channelId: project.channelId,
+      creator: project.creator,
+    };
+  }
+
+  async updateProject(
+    projectId: string,
+    userId: string,
+    body: { name?: string; description?: string; dueDate?: string; securityLevel?: string; status?: 'active' | 'archived' },
+  ) {
+    const project = await this.prisma.client.project.findUnique({
+      where: { id: projectId },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+
+    const updateData: any = {};
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.description !== undefined) updateData.description = body.description;
+    if (body.dueDate !== undefined) updateData.dueDate = body.dueDate ? new Date(body.dueDate) : null;
+    if (body.securityLevel !== undefined) updateData.securityLevel = body.securityLevel;
+    if (body.status !== undefined) updateData.status = body.status;
+
+    const updated = await this.prisma.client.project.update({
+      where: { id: projectId },
+      data: updateData,
+      include: {
+        creator: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatarUrl: true,
+          },
+        },
+        channel: {
+          include: {
+            members: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    avatarUrl: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        tasks: {
+          where: { deletedAt: null },
+          select: {
+            id: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    const totalTasks = updated.tasks.length;
+    const completedTasks = updated.tasks.filter((t) => t.status === 'done').length;
+    const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+    const members = updated.channel
+      ? updated.channel.members.map((m) => ({
+          id: m.user.id,
+          name: m.user.name,
+          email: m.user.email,
+          avatarUrl: m.user.avatarUrl,
+        }))
+      : [];
+
+    return {
+      id: updated.id,
+      name: updated.name,
+      description: updated.description,
+      color: updated.color,
+      status: updated.status,
+      dueDate: updated.dueDate ? updated.dueDate.toISOString() : null,
+      securityLevel: updated.securityLevel,
+      createdAt: updated.createdAt.toISOString(),
+      progress,
+      totalTasks,
+      completedTasks,
+      members,
+      channelId: updated.channelId,
+      creator: updated.creator,
+    };
+  }
+}
+
