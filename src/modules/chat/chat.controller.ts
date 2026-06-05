@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Query,
   Param,
@@ -38,7 +39,8 @@ export class ChatController {
       throw new BadRequestException('Target user ID is required');
     }
     const channel = await this.chatService.getOrCreateDMChannel(req.user.id, targetUserId);
-    this.chatGateway.broadcastNewConversation(channel);
+    // Do not broadcast conversation:created for direct messages to avoid premature empty conversation loading on target user's screen.
+    // The conversation will show up for target user on their first message event.
     return channel;
   }
 
@@ -235,5 +237,14 @@ export class ChatController {
     @Body() body: { name?: string; description?: string; dueDate?: string; securityLevel?: string; status?: 'active' | 'archived' },
   ) {
     return this.chatService.updateProject(projectId, req.user.id, body);
+  }
+
+  @Delete('projects/:id')
+  @ApiOperation({ summary: 'Delete a project' })
+  async deleteProject(
+    @Param('id') projectId: string,
+    @Req() req: any,
+  ) {
+    return this.chatService.deleteProject(projectId, req.user.id);
   }
 }

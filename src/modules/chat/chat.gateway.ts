@@ -17,18 +17,12 @@ import { UseFilters } from '@nestjs/common';
 @WebSocketGateway({
   cors: {
     origin: (requestOrigin, callback) => {
-      const localhostOrigins = ['http://localhost:3000', 'http://localhost:4000', 'http://127.0.0.1:3000'];
-      const productionOrigins = ['https://phatter.vercel.app', 'https://phatter.vercel.app/'];
-      const envOrigins = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(o => o.trim()) : [];
-      const allowedOrigins = [...new Set([...localhostOrigins, ...productionOrigins, ...envOrigins])];
-      
-      const normalizedOrigin = requestOrigin ? requestOrigin.replace(/\/$/, '') : '';
-      const isAllowed = !requestOrigin || allowedOrigins.some(o => o.replace(/\/$/, '') === normalizedOrigin);
-      
-      if (isAllowed) {
+      const allowedOrigins = process.env.FRONTEND_URL
+        ? process.env.FRONTEND_URL.split(',')
+        : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+      if (!requestOrigin || allowedOrigins.includes(requestOrigin) || allowedOrigins.some(o => requestOrigin.startsWith(o))) {
         callback(null, true);
       } else {
-        console.warn(`WebSocket CORS blocked origin: ${requestOrigin}`);
         callback(new Error('Not allowed by CORS'));
       }
     },
@@ -234,6 +228,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           ...message,
           tempId,
         });
+
+        // Send toast notification to recipients who are not the sender
+        if (member.userId !== message.senderId) {
+          this.server.to(`user:${member.userId}`).emit('notification:new', {
+            type: 'message',
+            channelId,
+            senderId: message.senderId,
+            senderName: message.senderName,
+            senderAvatar: message.senderAvatar ?? null,
+            text: message.text,
+            timestamp: message.timestamp,
+          });
+        }
       }
     } catch (err) {
       console.error('Failed to broadcast message to individual user rooms, falling back to channel room', err);
