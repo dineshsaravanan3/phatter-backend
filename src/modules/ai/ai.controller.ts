@@ -1,6 +1,8 @@
-import { Controller, Post, Body, Get } from '@nestjs/common';
+import { Controller, Post, Body, Get, Req, UseGuards } from '@nestjs/common';
 import { AiService } from './ai.service';
+import { JwtAuthGuard } from '../auth/jwt.guard';
 
+@UseGuards(JwtAuthGuard)
 @Controller('ai')
 export class AiController {
   constructor(private readonly aiService: AiService) {}
@@ -11,7 +13,7 @@ export class AiController {
   }
 
   @Post('chat')
-  chat(@Body() body: { index: number; reply: string }) {
-    return this.aiService.handleUserReply(body.index, body.reply);
+  chat(@Body() body: { index: number; reply: string }, @Req() req: any) {
+    return this.aiService.handleUserReply(body.index, body.reply, req.user?.id);
   }
 }

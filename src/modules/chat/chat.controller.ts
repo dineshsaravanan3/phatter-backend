@@ -121,7 +121,7 @@ export class ChatController {
   @ApiOperation({ summary: 'Create a task in a channel' })
   async createTask(
     @Param('channelId') channelId: string,
-    @Body() body: { title: string; priority: string; assignedToEmail?: string; dueDate?: string },
+    @Body() body: { title: string; priority: string; assignedToEmail?: string; assignedTo?: string; dueDate?: string; sprint?: string },
     @Req() req: any,
   ) {
     return this.chatService.createTask(channelId, req.user.id, body);
@@ -246,5 +246,20 @@ export class ChatController {
     @Req() req: any,
   ) {
     return this.chatService.deleteProject(projectId, req.user.id);
+  }
+
+  @Delete('messages/:messageId')
+  @ApiOperation({ summary: 'Delete a message' })
+  async deleteMessage(@Param('messageId') messageId: string, @Req() req: any) {
+    const updated = await this.chatService.deleteMessage(messageId, req.user.id);
+    this.chatGateway.broadcastMessageDeletion(updated.channelId, messageId);
+    return { success: true };
+  }
+
+  @Delete('tasks/:taskId')
+  @ApiOperation({ summary: 'Delete a task' })
+  async deleteTask(@Param('taskId') taskId: string, @Req() req: any) {
+    await this.chatService.deleteTask(taskId, req.user.id);
+    return { success: true };
   }
 }

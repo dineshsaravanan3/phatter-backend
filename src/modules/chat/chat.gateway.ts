@@ -17,18 +17,13 @@ import { UseFilters } from '@nestjs/common';
 @WebSocketGateway({
   cors: {
     origin: (requestOrigin, callback) => {
-      const allowedOrigins = [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-        'https://phatter.vercel.app',
-      ];
-      if (process.env.FRONTEND_URL) {
-        allowedOrigins.push(...process.env.FRONTEND_URL.split(',').map(o => o.trim()));
-      }
+      const allowedOrigins = process.env.FRONTEND_URL
+        ? process.env.FRONTEND_URL.split(',')
+        : ['http://localhost:3000', 'http://127.0.0.1:3000'];
       if (!requestOrigin || allowedOrigins.includes(requestOrigin) || allowedOrigins.some(o => requestOrigin.startsWith(o))) {
         callback(null, true);
       } else {
-        callback(new Error(`Not allowed by CORS: ${requestOrigin}`));
+        callback(new Error('Not allowed by CORS'));
       }
     },
     credentials: true,
@@ -263,15 +258,51 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       isPinned,
     });
   }
+  async broadcastMessageReaction(channelId: string, messageId: string, reactions: any) {
+    try {
+      const members = await this.prisma.client.channelMember.findMany({
+        where: { channelId },
+        select: { userId: true },
+      });
 
-  broadcastMessageReaction(channelId: string, messageId: string, reactions: any) {
+      const message = await this.prisma.client.message.findUnique({
+        where: { id: messageId },
+        include: {
+          user: { select: { id: true, name: true } },
+        },
+      });
+
+      const latestReaction = await this.prisma.client.messageReaction.findFirst({
+        where: { messageId },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: { select: { id: true, name: true } },
+        },
+      });
+
+      if (message && latestReaction) {
+        for (const member of members) {
+          this.server.to(`user:${member.userId}`).emit('message:reaction_notification', {
+            channelId,
+            messageId,
+            emoji: latestReaction.emoji,
+            reactorName: latestReaction.user.name,
+            reactorId: latestReaction.user.id,
+            messageContent: message.content,
+            createdAt: latestReaction.createdAt.toISOString(),
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to broadcast reaction notification', err);
+    }
+
     this.server.to(`channel:${channelId}`).emit('message:reaction', {
       channelId,
       messageId,
       reactions,
     });
   }
-
   broadcastNewConversation(channel: any) {
     try {
       const members = channel.members || [];
@@ -285,5 +316,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (err) {
       console.error('Failed to broadcast new conversation', err);
     }
+  }
+
+  broadcastMessageDeletion(channelId: string, messageId: string) {
+    this.server.to(`channel:${channelId}`).emit('message:delete', {
+      channelId,
+      messageId,
+    });
   }
 }

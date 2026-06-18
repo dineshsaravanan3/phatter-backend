@@ -211,7 +211,7 @@ export class ChatService {
 
   // Searches users within the same workspace to prevent global scraping
   async searchUsers(query: string, currentUserId: string) {
-    const hasQuery = query && query.trim().length >= 3;
+    const hasQuery = query && query.trim().length >= 1;
 
     // 1. Find all workspaces the current user is associated with
     const createdWorkspaces = await this.prisma.client.workspace.findMany({
@@ -251,8 +251,9 @@ export class ChatService {
     if (hasQuery) {
       whereClause.AND.push({
         OR: [
-          { name: { contains: query } },
-          { email: { contains: query } },
+          { name: { startsWith: query } },
+          { name: { contains: ' ' + query } },
+          { email: { startsWith: query } },
         ],
       });
     }
@@ -410,6 +411,22 @@ export class ChatService {
         const channel = m.channel;
         const lastMessageRecord = channel.messages[0] || null;
 
+        // Query latest reaction in this channel
+        const latestReaction = await this.prisma.client.messageReaction.findFirst({
+          where: { message: { channelId: channel.id } },
+          orderBy: { createdAt: 'desc' },
+          include: {
+            message: true,
+          },
+        });
+
+        let isReactionNewer = false;
+        if (latestReaction) {
+          if (!lastMessageRecord || latestReaction.createdAt.getTime() > lastMessageRecord.createdAt.getTime()) {
+            isReactionNewer = true;
+          }
+        }
+
         // 2. Short-circuit unread checks: only run database count if there are actual new unread messages
         const lastReadAt = lastReadMap.get(channel.id) || new Date(0);
         let unreadCount = 0;
@@ -424,8 +441,18 @@ export class ChatService {
                   gt: lastReadAt,
                 },
                 userId: { not: userId }, // do not count own messages as unread
+                deletedAt: null,
               },
             });
+          }
+        }
+
+        // If reaction is newer and unread
+        if (isReactionNewer && latestReaction && latestReaction.userId !== userId) {
+          if (latestReaction.createdAt.getTime() > lastReadAt.getTime()) {
+            if (unreadCount === 0) {
+              unreadCount = 1;
+            }
           }
         }
 
@@ -455,6 +482,36 @@ export class ChatService {
           .toUpperCase()
           .slice(0, 2);
 
+        let lastMessage = '';
+        if (lastMessageRecord) {
+          lastMessage = lastMessageRecord.deletedAt ? 'this message was deleted' : lastMessageRecord.content;
+        }
+        let lastMessageTime = lastMessageRecord
+          ? new Date(lastMessageRecord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '';
+        let lastMessageAtStr = lastMessageRecord
+          ? lastMessageRecord.createdAt.toISOString()
+          : channel.createdAt.toISOString();
+
+        if (isReactionNewer && latestReaction) {
+          if (latestReaction.message.deletedAt) {
+            lastMessage = 'this message was deleted';
+          } else {
+            lastMessage = `Reacted ${latestReaction.emoji} to "${latestReaction.message.content}"`;
+          }
+          lastMessageTime = new Date(latestReaction.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          lastMessageAtStr = latestReaction.createdAt.toISOString();
+        }
+
+        let lastMessageId = lastMessageRecord ? lastMessageRecord.id : undefined;
+
+        let lastSenderId: string | undefined = undefined;
+        if (isReactionNewer && latestReaction) {
+          lastSenderId = latestReaction.userId;
+        } else if (lastMessageRecord) {
+          lastSenderId = lastMessageRecord.userId;
+        }
+
         return {
           id: channel.id,
           name,
@@ -463,16 +520,15 @@ export class ChatService {
           role,
           statusText,
           type: channel.type === 'dm' ? 'direct' : channel.type === 'group' ? 'group' : 'channel',
-          lastMessage: lastMessageRecord ? lastMessageRecord.content : '',
-          lastMessageTime: lastMessageRecord
-            ? new Date(lastMessageRecord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            : '',
-          lastMessageAt: lastMessageRecord
-            ? lastMessageRecord.createdAt.toISOString()
-            : channel.createdAt.toISOString(),
+          lastMessage,
+          lastMessageId,
+          lastMessageTime,
+          lastMessageAt: lastMessageAtStr,
+          lastSenderId,
           unreadCount,
           isOnline,
           participants: channel.members.map((member) => ({
+            id: member.userId,
             name: member.user.name,
             avatar: member.user.avatarUrl || undefined,
             initials: member.user.name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2),
@@ -563,6 +619,7 @@ export class ChatService {
           senderName: msg.user.name,
           senderAvatar: msg.user.avatarUrl || undefined,
           timestamp: new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          createdAt: msg.createdAt.toISOString(),
           isSelf: msg.userId === userId,
           parentId: msg.parentId || undefined,
           isPinned: msg.isPinned,
@@ -572,6 +629,7 @@ export class ChatService {
             size: formatBytes(Number(file.sizeBytes)),
             type: file.mimeType.includes('pdf') ? 'pdf' : file.mimeType.includes('image') ? 'image' : 'other',
           } : undefined,
+          isDeleted: msg.deletedAt !== null,
         };
       })
       .reverse();
@@ -616,7 +674,7 @@ export class ChatService {
   async updateLastRead(channelId: string, userId: string) {
     await this.validateMembership(channelId, userId);
 
-    return this.prisma.client.messageRead.upsert({
+    const result = await this.prisma.client.messageRead.upsert({
       where: {
         userId_channelId: { userId, channelId },
       },
@@ -629,6 +687,7 @@ export class ChatService {
         lastReadAt: new Date(),
       },
     });
+    return result;
   }
 
   // --- TASK MANAGEMENT ENDPOINTS ---
@@ -647,6 +706,14 @@ export class ChatService {
             email: true,
           },
         },
+        creator: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+            email: true,
+          },
+        },
       },
     });
   }
@@ -654,12 +721,14 @@ export class ChatService {
   async createTask(
     channelId: string,
     creatorId: string,
-    body: { title: string; priority: string; assignedToEmail?: string; dueDate?: string; sprint?: string },
+    body: { title: string; priority: string; assignedToEmail?: string; assignedTo?: string; dueDate?: string; sprint?: string },
   ) {
     await this.validateMembership(channelId, creatorId);
 
     let assigneeId: string | undefined = undefined;
-    if (body.assignedToEmail) {
+    if (body.assignedTo) {
+      assigneeId = body.assignedTo;
+    } else if (body.assignedToEmail) {
       const user = await this.prisma.client.user.findUnique({
         where: { email: body.assignedToEmail },
       });
@@ -687,6 +756,14 @@ export class ChatService {
       },
       include: {
         assignee: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+            email: true,
+          },
+        },
+        creator: {
           select: {
             id: true,
             name: true,
@@ -724,6 +801,14 @@ export class ChatService {
       data: updateData,
       include: {
         assignee: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+            email: true,
+          },
+        },
+        creator: {
           select: {
             id: true,
             name: true,
@@ -885,50 +970,33 @@ export class ChatService {
     }
     await this.validateMembership(message.channelId, userId);
 
-    // Find if the user has any other reaction on this message to implement "shifting"
-    const otherReaction = await this.prisma.client.messageReaction.findFirst({
+    // Fetch all reactions by this user on this message to avoid database emoji collation issues
+    const userReactions = await this.prisma.client.messageReaction.findMany({
       where: {
         messageId,
         userId,
-        emoji: { not: emoji },
       },
     });
 
-    if (otherReaction) {
-      // User is shifting from one emoji to another
-      await this.prisma.client.messageReaction.delete({
-        where: { id: otherReaction.id },
-      });
-      
-      // Now create the new one (if it was a shift, we always create the new one)
+    const existing = userReactions.find((r) => r.emoji === emoji);
+
+    // Delete all current reactions by this user on this message to maintain single reaction rule
+    await this.prisma.client.messageReaction.deleteMany({
+      where: {
+        messageId,
+        userId,
+      },
+    });
+
+    // If the clicked reaction didn't already exist, create it (standard toggle behavior)
+    if (!existing) {
       await this.prisma.client.messageReaction.create({
-        data: { messageId, userId, emoji },
-      });
-    } else {
-      // Standard toggle behavior for the same emoji
-      const existing = await this.prisma.client.messageReaction.findUnique({
-        where: {
-          messageId_userId_emoji: {
-            messageId,
-            userId,
-            emoji,
-          },
+        data: {
+          messageId,
+          userId,
+          emoji,
         },
       });
-
-      if (existing) {
-        await this.prisma.client.messageReaction.delete({
-          where: { id: existing.id },
-        });
-      } else {
-        await this.prisma.client.messageReaction.create({
-          data: {
-            messageId,
-            userId,
-            emoji,
-          },
-        });
-      }
     }
 
     // Return the updated reactions grouped by emoji
@@ -966,6 +1034,32 @@ export class ChatService {
       channelId: message.channelId,
       reactions: Array.from(reactionGroupMap.values()).sort((a, b) => a.emoji.localeCompare(b.emoji)),
     };
+  }
+
+  async deleteMessage(messageId: string, userId: string) {
+    const message = await this.prisma.client.message.findUnique({
+      where: { id: messageId },
+      include: { channel: true },
+    });
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+    await this.validateMembership(message.channelId, userId);
+
+    if (message.channel.type === 'dm') {
+      throw new ForbiddenException('Delete for Me is handled on the client for one-to-one chats');
+    }
+
+    if (message.userId !== userId) {
+      throw new ForbiddenException('You can only delete your own messages');
+    }
+
+    const updated = await this.prisma.client.message.update({
+      where: { id: messageId },
+      data: { deletedAt: new Date() },
+    });
+
+    return updated;
   }
 
   // --- PROJECT MANAGEMENT SERVICES ---
@@ -1279,6 +1373,21 @@ export class ChatService {
     }
 
     return { success: true };
+  }
+
+  async deleteTask(taskId: string, userId: string) {
+    const task = await this.prisma.client.task.findUnique({
+      where: { id: taskId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+    await this.validateMembership(task.channelId, userId);
+
+    return this.prisma.client.task.update({
+      where: { id: taskId },
+      data: { deletedAt: new Date() },
+    });
   }
 }
 
