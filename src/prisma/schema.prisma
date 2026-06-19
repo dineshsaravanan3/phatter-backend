@@ -225,7 +225,9 @@ model Task {
   createdAt       DateTime     @default(now()) @map("created_at") @db.DateTime(0)
   updatedAt       DateTime     @updatedAt @map("updated_at") @db.DateTime(0)
   deletedAt       DateTime?    @map("deleted_at") @db.DateTime(0)
-  sprint          String?      @map("sprint") @db.VarChar(100)
+  // New foreign‑key to Sprint (nullable)
+  sprintId        String?      @map("sprint_id") @db.VarChar(36)
+  sprint          Sprint?      @relation("SprintTasks", fields: [sprintId], references: [id])
 
   channel      Channel       @relation(fields: [channelId], references: [id], onDelete: Cascade)
   project      Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
@@ -234,6 +236,21 @@ model Task {
   taskComments TaskComment[]
 
   @@map("tasks")
+}
+
+model Sprint {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  name       String   @db.VarChar(100)
+  startDate  DateTime? @db.DateTime(0)
+  endDate    DateTime? @db.DateTime(0)
+  status     String   @default("active") @db.VarChar(20)
+  projectId  String   @map("project_id") @db.VarChar(36)
+
+  // Relations
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks      Task[]   @relation("SprintTasks")
+
+  @@map("sprints")
 }
 
 model TaskComment {

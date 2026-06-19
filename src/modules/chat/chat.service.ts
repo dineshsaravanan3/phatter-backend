@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
@@ -630,6 +630,7 @@ export class ChatService {
             type: file.mimeType.includes('pdf') ? 'pdf' : file.mimeType.includes('image') ? 'image' : 'other',
           } : undefined,
           isDeleted: msg.deletedAt !== null,
+          isSystem: msg.type === 'system',
         };
       })
       .reverse();
@@ -921,6 +922,8 @@ export class ChatService {
     await this.validateMembership(channelId, userId);
 
     const uniqueMemberIds = Array.from(new Set(memberIds));
+    let systemMessage: any = null;
+
     if (uniqueMemberIds.length > 0) {
       await this.prisma.client.channelMember.createMany({
         data: uniqueMemberIds.map((id) => ({
@@ -930,9 +933,45 @@ export class ChatService {
         })),
         skipDuplicates: true,
       });
+
+      try {
+        const addedUsers = await this.prisma.client.user.findMany({
+          where: { id: { in: uniqueMemberIds } },
+          select: { name: true },
+        });
+        const adder = await this.prisma.client.user.findUnique({
+          where: { id: userId },
+          select: { name: true },
+        });
+
+        if (addedUsers.length > 0 && adder) {
+          const names = addedUsers.map((u) => u.name).join(', ');
+          const systemText = `${adder.name} added ${names}`;
+
+          systemMessage = await this.prisma.client.message.create({
+            data: {
+              channelId,
+              userId,
+              content: systemText,
+              type: 'system',
+            },
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  avatarUrl: true,
+                },
+              },
+            },
+          });
+        }
+      } catch (err) {
+        console.error('Failed to create system message for added members', err);
+      }
     }
 
-    return this.prisma.client.channel.findUnique({
+    const updatedChannel = await this.prisma.client.channel.findUnique({
       where: { id: channelId },
       include: {
         members: {
@@ -942,6 +981,11 @@ export class ChatService {
         },
       },
     });
+
+    return {
+      channel: updatedChannel,
+      systemMessage,
+    };
   }
 
   async toggleMessagePin(messageId: string, userId: string) {
@@ -1056,7 +1100,7 @@ export class ChatService {
 
     const updated = await this.prisma.client.message.update({
       where: { id: messageId },
-      data: { deletedAt: new Date() },
+      data: { deletedAt: new Date(), isPinned: false },
     });
 
     return updated;
@@ -1374,6 +1418,104 @@ export class ChatService {
 
     return { success: true };
   }
+
+  async removeProjectMember(projectId: string, memberId: string, currentUserId: string) {
+    const project = await this.prisma.client.project.findUnique({
+      where: { id: projectId },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+
+    if (!project.channelId) {
+      throw new BadRequestException('Project has no associated channel');
+    }
+
+    // Permission check: only the project creator or a channel admin can remove a member
+    const isCreator = project.createdBy === currentUserId;
+    const channelMember = await this.prisma.client.channelMember.findUnique({
+      where: {
+        channelId_userId: {
+          channelId: project.channelId,
+          userId: currentUserId,
+        },
+      },
+    });
+
+    const isChannelAdmin = channelMember?.role === 'admin';
+
+    if (!isCreator && !isChannelAdmin) {
+      throw new ForbiddenException('You do not have permission to remove members from this project');
+    }
+
+    // Verify target user is actually a member of the project's channel
+    const targetMember = await this.prisma.client.channelMember.findUnique({
+      where: {
+        channelId_userId: {
+          channelId: project.channelId,
+          userId: memberId,
+        },
+      },
+    });
+
+    if (!targetMember) {
+      throw new NotFoundException('Member is not part of this project');
+    }
+
+    // Cannot remove the project creator
+    if (memberId === project.createdBy) {
+      throw new BadRequestException('Cannot remove the project creator');
+    }
+
+    // Delete membership
+    await this.prisma.client.channelMember.delete({
+      where: {
+        channelId_userId: {
+          channelId: project.channelId,
+          userId: memberId,
+        },
+      },
+    });
+
+    let systemMessage: any = null;
+    try {
+      const removedUser = await this.prisma.client.user.findUnique({
+        where: { id: memberId },
+        select: { name: true },
+      });
+      const remover = await this.prisma.client.user.findUnique({
+        where: { id: currentUserId },
+        select: { name: true },
+      });
+
+      if (removedUser && remover) {
+        const systemText = `${remover.name} removed ${removedUser.name} from the project`;
+        systemMessage = await this.prisma.client.message.create({
+          data: {
+            channelId: project.channelId,
+            userId: currentUserId,
+            content: systemText,
+            type: 'system',
+          },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                avatarUrl: true,
+              },
+            },
+          },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to create system message for removed project member', err);
+    }
+
+    return { success: true, channelId: project.channelId, systemMessage };
+  }
+
 
   async deleteTask(taskId: string, userId: string) {
     const task = await this.prisma.client.task.findUnique({

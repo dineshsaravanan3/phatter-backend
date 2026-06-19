@@ -90,6 +90,7 @@ export class ChatController {
       isSelf: false, // Recipients see it as not self
       channelId,
       parentId: message.parentId || undefined,
+      isSystem: false,
     };
 
     // Broadcast the message via WebSockets to all connected clients in the room
@@ -181,8 +182,25 @@ export class ChatController {
     if (!memberIds || !Array.isArray(memberIds) || memberIds.length === 0) {
       throw new BadRequestException('memberIds must be a non-empty array');
     }
-    const channel = await this.chatService.addMembersToChannel(req.user.id, channelId, memberIds);
+    const { channel, systemMessage } = await this.chatService.addMembersToChannel(req.user.id, channelId, memberIds);
     this.chatGateway.broadcastNewConversation(channel);
+
+    if (systemMessage) {
+      const formattedMessage = {
+        id: systemMessage.id,
+        text: systemMessage.content,
+        senderId: systemMessage.userId,
+        senderName: systemMessage.user.name,
+        senderAvatar: systemMessage.user.avatarUrl || undefined,
+        timestamp: new Date(systemMessage.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        createdAt: systemMessage.createdAt.toISOString(),
+        isSelf: false,
+        channelId,
+        isSystem: true,
+      };
+      this.chatGateway.broadcastNewMessage(channelId, formattedMessage);
+    }
+
     return channel;
   }
 
@@ -246,6 +264,34 @@ export class ChatController {
     @Req() req: any,
   ) {
     return this.chatService.deleteProject(projectId, req.user.id);
+  }
+
+  @Delete('projects/:projectId/members/:memberId')
+  @ApiOperation({ summary: 'Remove a member from a project' })
+  async removeProjectMember(
+    @Param('projectId') projectId: string,
+    @Param('memberId') memberId: string,
+    @Req() req: any,
+  ) {
+    const result = await this.chatService.removeProjectMember(projectId, memberId, req.user.id);
+
+    if (result.systemMessage && result.channelId) {
+      const formattedMessage = {
+        id: result.systemMessage.id,
+        text: result.systemMessage.content,
+        senderId: result.systemMessage.userId,
+        senderName: result.systemMessage.user.name,
+        senderAvatar: result.systemMessage.user.avatarUrl || undefined,
+        timestamp: new Date(result.systemMessage.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        createdAt: result.systemMessage.createdAt.toISOString(),
+        isSelf: false,
+        channelId: result.channelId,
+        isSystem: true,
+      };
+      this.chatGateway.broadcastNewMessage(result.channelId, formattedMessage);
+    }
+
+    return { success: true };
   }
 
   @Delete('messages/:messageId')
