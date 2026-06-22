@@ -826,7 +826,7 @@ export class ChatService {
     body: { name: string; description?: string; type: 'public' | 'private'; memberIds?: string[] },
   ) {
     const workspaceId = await this.ensureDefaultWorkspace(userId);
-    
+
     const channel = await this.prisma.client.channel.create({
       data: {
         workspaceId,
@@ -1170,11 +1170,11 @@ export class ChatService {
 
       const members = p.channel
         ? p.channel.members.map((m) => ({
-            id: m.user.id,
-            name: m.user.name,
-            email: m.user.email,
-            avatarUrl: m.user.avatarUrl,
-          }))
+          id: m.user.id,
+          name: m.user.name,
+          email: m.user.email,
+          avatarUrl: m.user.avatarUrl,
+        }))
         : [];
 
       return {
@@ -1366,11 +1366,11 @@ export class ChatService {
 
     const members = updated.channel
       ? updated.channel.members.map((m) => ({
-          id: m.user.id,
-          name: m.user.name,
-          email: m.user.email,
-          avatarUrl: m.user.avatarUrl,
-        }))
+        id: m.user.id,
+        name: m.user.name,
+        email: m.user.email,
+        avatarUrl: m.user.avatarUrl,
+      }))
       : [];
 
     return {

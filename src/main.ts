@@ -10,17 +10,13 @@ async function bootstrap() {
   // Enable CORS
   app.enableCors({
     origin: (requestOrigin, callback) => {
-      const defaultOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://phatter.vercel.app'];
       const allowedOrigins = process.env.FRONTEND_URL
-        ? [...defaultOrigins, ...process.env.FRONTEND_URL.split(',').map(o => o.trim().replace(/\/$/, ''))]
-        : defaultOrigins;
-      
-      const cleanOrigin = requestOrigin ? requestOrigin.trim().replace(/\/$/, '') : '';
-      
-      if (!requestOrigin || allowedOrigins.includes(cleanOrigin) || allowedOrigins.some(o => cleanOrigin.startsWith(o))) {
+        ? process.env.FRONTEND_URL.split(',')
+        : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+      if (!requestOrigin || allowedOrigins.includes(requestOrigin) || allowedOrigins.some(o => requestOrigin.startsWith(o))) {
         callback(null, true);
       } else {
-        callback(new Error(`Not allowed by CORS: ${requestOrigin}`));
+        callback(new Error('Not allowed by CORS'));
       }
     },
     credentials: true,

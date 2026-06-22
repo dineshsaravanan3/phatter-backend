@@ -21,9 +21,9 @@ import { UseFilters } from '@nestjs/common';
       const allowedOrigins = process.env.FRONTEND_URL
         ? [...defaultOrigins, ...process.env.FRONTEND_URL.split(',').map(o => o.trim().replace(/\/$/, ''))]
         : defaultOrigins;
-      
+
       const cleanOrigin = requestOrigin ? requestOrigin.trim().replace(/\/$/, '') : '';
-      
+
       if (!requestOrigin || allowedOrigins.includes(cleanOrigin) || allowedOrigins.some(o => cleanOrigin.startsWith(o))) {
         callback(null, true);
       } else {
@@ -37,8 +37,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
-  // In-memory mapping of User ID -> Set of socket connection IDs (supports multiple tabs)
-  private activeConnections = new Map<string, Set<string>>();
+  // In-memory mapping of User ID -> Socket ID -> 'online' | 'offline'
+  private activeConnections = new Map<string, Map<string, 'online' | 'offline'>>();
 
   // In-memory map to store socket disconnect timeouts matching JWT token expirations
   private socketExpiryTimeouts = new Map<string, NodeJS.Timeout>();
@@ -48,11 +48,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly configService: ConfigService,
     private readonly chatService: ChatService,
     private readonly prisma: PrismaService,
-  ) {}
+  ) { }
 
-  // Expose the active connections map so the ChatService can check online statuses
   getOnlineUsers(): Set<string> {
-    return new Set(this.activeConnections.keys());
+    const onlineUsers = new Set<string>();
+    for (const [userId, sockets] of this.activeConnections.entries()) {
+      let isOnline = false;
+      for (const status of sockets.values()) {
+        if (status === 'online') {
+          isOnline = true;
+          break;
+        }
+      }
+      if (isOnline) onlineUsers.add(userId);
+    }
+    return onlineUsers;
   }
 
   async handleConnection(client: Socket) {
@@ -87,14 +97,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // 3. Register socket in presence system
       if (!this.activeConnections.has(userId)) {
-        this.activeConnections.set(userId, new Set());
-        // First tab connected: notify channels
-        this.server.emit('user:status_change', {
-          userId,
-          status: 'online',
-        });
+        this.activeConnections.set(userId, new Map());
       }
-      this.activeConnections.get(userId)!.add(client.id);
+      const userSockets = this.activeConnections.get(userId)!;
+      userSockets.set(client.id, 'online');
+
+      // Re-evaluate overall user status (might have been offline due to all tabs being idle)
+      this.server.emit('user:status_change', {
+        userId,
+        status: 'online',
+      });
 
       // 4. Register connection timeout if JWT token has an expiration
       if (payload.exp) {
@@ -135,18 +147,27 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const userSockets = this.activeConnections.get(userId);
       if (userSockets) {
         userSockets.delete(socketId);
-        if (userSockets.size === 0) {
-          // Last tab closed: user is now offline
-          this.activeConnections.delete(userId);
 
-          // Update database once
+        let hasOnlineSocket = false;
+        for (const status of userSockets.values()) {
+          if (status === 'online') {
+            hasOnlineSocket = true;
+            break;
+          }
+        }
+
+        if (userSockets.size === 0) {
+          this.activeConnections.delete(userId);
+        }
+
+        if (!hasOnlineSocket) {
+          // All tabs closed or idle: user is now offline
           const lastSeenAt = new Date();
           await this.prisma.client.user.update({
             where: { id: userId },
             data: { lastSeenAt },
           }).catch((err) => console.error('Failed to update last seen', err));
 
-          // Broadcast offline event
           this.server.emit('user:status_change', {
             userId,
             status: 'offline',
@@ -217,6 +238,52 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (err) {
       // Ignore unauthorized attempts
     }
+  }
+
+  @SubscribeMessage('user:presence')
+  async handleUserPresence(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { status: 'online' | 'offline' | 'inactive' },
+  ) {
+    const userId = client.data.userId;
+    if (!userId) return;
+
+    let targetStatus: 'online' | 'offline' = data.status === 'inactive' ? 'offline' : data.status;
+
+    const userSockets = this.activeConnections.get(userId);
+    if (userSockets) {
+      userSockets.set(client.id, targetStatus);
+    }
+
+    // Determine overall user status
+    let isUserOnline = false;
+    if (userSockets) {
+      for (const status of userSockets.values()) {
+        if (status === 'online') {
+          isUserOnline = true;
+          break;
+        }
+      }
+    }
+
+    const overallStatus = isUserOnline ? 'online' : 'offline';
+
+    // Only broadcast if the state implies offline or if we want to ensure online state
+    // To minimize spam, we can just broadcast the resolved state
+    const lastSeenAt = new Date();
+
+    if (overallStatus === 'offline') {
+      await this.prisma.client.user.update({
+        where: { id: userId },
+        data: { lastSeenAt },
+      }).catch((err) => console.error('Failed to update last seen', err));
+    }
+
+    this.server.emit('user:status_change', {
+      userId,
+      status: overallStatus,
+      lastSeenAt,
+    });
   }
 
   // Helper method to broadcast newly created messages to active room members
