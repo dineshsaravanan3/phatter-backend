@@ -96,6 +96,8 @@ model User {
   notifications      Notification[]
   refreshTokens      RefreshToken[]
   messageReads       MessageRead[]
+  scheduledMessages  ScheduledMessage[]
+  aiChatMessages     AiChatMessage[]
 
   @@map("users")
 }
@@ -135,6 +137,7 @@ model Channel {
   messageReads MessageRead[]
   tasks       Task[]
   projects    Project[]
+  scheduledMessages ScheduledMessage[]
 
   @@map("channels")
 }
@@ -283,6 +286,7 @@ model Project {
   channel   Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
   creator   User      @relation(fields: [createdBy], references: [id])
   tasks     Task[]
+  sprints   Sprint[]
 
   @@map("projects")
 }
@@ -330,3 +334,72 @@ model MessageRead {
   @@unique([userId, channelId])
   @@map("message_reads")
 }
+
+model ScheduledMessage {
+  id            String   @id @default(uuid()) @db.VarChar(36)
+  channelId     String   @map("channel_id") @db.VarChar(36)
+  userId        String   @map("user_id") @db.VarChar(36)
+  scheduledBy   String   @map("scheduled_by") @db.VarChar(36)
+  createdViaAI  Boolean  @default(false) @map("created_via_ai")
+  content       String   @db.Text
+  scheduledAt   DateTime @map("scheduled_at") @db.DateTime(0)
+  timezone      String   @db.VarChar(100)
+  sent          Boolean  @default(false)
+  processing    Boolean  @default(false)
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  channel       Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user          User     @relation(fields: [userId], references: [id])
+
+  @@index([sent, processing, scheduledAt])
+  @@map("scheduled_messages")
+}
+
+model AiPendingAction {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  userId      String   @map("user_id") @db.VarChar(36)
+  workspaceId String   @map("workspace_id") @db.VarChar(36)
+  toolName    String   @map("tool_name") @db.VarChar(100)
+  arguments   Json
+  status      String   @default("pending") @db.VarChar(20)
+  expiresAt   DateTime @map("expires_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([userId, status])
+  @@map("ai_pending_actions")
+}
+
+model AiAuditLog {
+  id              String   @id @default(uuid()) @db.VarChar(36)
+  userId          String   @map("user_id") @db.VarChar(36)
+  toolName        String   @map("tool_name") @db.VarChar(100)
+  toolVersion     String?  @map("tool_version") @db.VarChar(20)
+  arguments       Json
+  result          Json?
+  success         Boolean
+  executionTimeMs Int      @map("execution_time_ms")
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  @@map("ai_audit_logs")
+}
+
+model AiChatMessage {
+  id                   String            @id @default(uuid()) @db.VarChar(36)
+  userId               String            @map("user_id") @db.VarChar(36)
+  text                 String            @db.Text
+  sender               String            @db.VarChar(10) // "ai" | "user"
+  attachment           Json?             // Optional attachment metadata
+  requiresConfirmation Boolean           @default(false) @map("requires_confirmation")
+  actionId             String?           @map("action_id") @db.VarChar(36)
+  tool                 String?           @db.VarChar(100)
+  arguments            Json?
+  toolResults          Json?             @map("tool_results")
+  confirmationStatus   String?           @map("confirmation_status") @db.VarChar(20)
+  createdAt            DateTime          @default(now()) @map("created_at")
+
+  user                 User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("ai_chat_messages")
+}
+

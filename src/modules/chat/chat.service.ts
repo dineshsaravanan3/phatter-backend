@@ -753,7 +753,7 @@ export class ChatService {
         assignedTo: assigneeId,
         position,
         aiSuggested: false,
-        sprint: body.sprint || null,
+        sprintId: body.sprint || null,
       },
       include: {
         assignee: {
@@ -795,7 +795,7 @@ export class ChatService {
     if (body.priority !== undefined) updateData.priority = body.priority;
     if (body.assignedTo !== undefined) updateData.assignedTo = body.assignedTo;
     if (body.dueDate !== undefined) updateData.dueDate = body.dueDate ? new Date(body.dueDate) : null;
-    if (body.sprint !== undefined) updateData.sprint = body.sprint;
+    if (body.sprint !== undefined) updateData.sprintId = body.sprint;
 
     return this.prisma.client.task.update({
       where: { id: taskId },
@@ -1529,6 +1529,298 @@ export class ChatService {
     return this.prisma.client.task.update({
       where: { id: taskId },
       data: { deletedAt: new Date() },
+    });
+  }
+
+  async searchProjects(userId: string, workspaceId: string, query?: string, limit = 20, page = 1) {
+    const take = Math.min(Math.max(limit, 1), 100);
+    const skip = (Math.max(page, 1) - 1) * take;
+
+    const whereClause: any = {
+      workspaceId,
+      OR: [
+        { createdBy: userId },
+        {
+          channel: {
+            members: {
+              some: { userId },
+            },
+          },
+        },
+      ],
+    };
+
+    if (query && query.trim()) {
+      whereClause.name = { contains: query };
+    }
+
+    return this.prisma.client.project.findMany({
+      where: whereClause,
+      take,
+      skip,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        creator: { select: { id: true, name: true, email: true } },
+        channel: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  async getProjectByIdOrName(userId: string, workspaceId: string, idOrName: string) {
+    const project = await this.prisma.client.project.findFirst({
+      where: {
+        workspaceId,
+        OR: [
+          { id: idOrName },
+          { name: idOrName },
+        ],
+      },
+      include: {
+        creator: { select: { id: true, name: true, email: true } },
+        channel: {
+          include: {
+            members: {
+              include: {
+                user: { select: { id: true, name: true, email: true, avatarUrl: true } },
+              },
+            },
+          },
+        },
+        tasks: {
+          where: { deletedAt: null },
+          orderBy: { position: 'asc' },
+          include: {
+            assignee: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project with ID/Name "${idOrName}" not found in this workspace.`);
+    }
+
+    const isCreator = project.createdBy === userId;
+    const isMember = project.channel?.members.some(m => m.userId === userId);
+    if (!isCreator && !isMember) {
+      throw new ForbiddenException(`You do not have access to this project.`);
+    }
+
+    return project;
+  }
+
+  async searchTasks(userId: string, workspaceId: string, query?: string, projectId?: string, limit = 20, page = 1) {
+    const take = Math.min(Math.max(limit, 1), 100);
+    const skip = (Math.max(page, 1) - 1) * take;
+
+    const whereClause: any = {
+      deletedAt: null,
+      channel: {
+        workspaceId,
+        members: {
+          some: { userId },
+        },
+      },
+    };
+
+    if (projectId) {
+      whereClause.projectId = projectId;
+    }
+
+    if (query && query.trim()) {
+      whereClause.title = { contains: query };
+    }
+
+    return this.prisma.client.task.findMany({
+      where: whereClause,
+      take,
+      skip,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        project: { select: { id: true, name: true } },
+        assignee: { select: { id: true, name: true, email: true } },
+        creator: { select: { id: true, name: true, email: true } },
+      },
+    });
+  }
+
+  async createTaskInProject(
+    userId: string,
+    workspaceId: string,
+    projectName: string,
+    title: string,
+    description?: string,
+    priority?: string,
+    dueDate?: string,
+  ) {
+    const project = await this.prisma.client.project.findFirst({
+      where: {
+        workspaceId,
+        name: { contains: projectName },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project "${projectName}" not found in this workspace.`);
+    }
+
+    if (!project.channelId) {
+      throw new BadRequestException(`Project "${projectName}" does not have an associated channel.`);
+    }
+
+    const task = await this.createTask(project.channelId, userId, {
+      title,
+      priority: (priority || 'medium') as any,
+      dueDate,
+    });
+
+    const updateData: any = { projectId: project.id };
+    if (description) {
+      updateData.description = description;
+    }
+
+    return this.prisma.client.task.update({
+      where: { id: task.id },
+      data: updateData,
+      include: {
+        assignee: { select: { id: true, name: true, email: true } },
+        project: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  async closeTaskByName(userId: string, workspaceId: string, taskTitle: string, projectName?: string) {
+    const whereClause: any = {
+      title: { contains: taskTitle },
+      deletedAt: null,
+      status: { not: 'done' },
+      channel: {
+        workspaceId,
+        members: {
+          some: { userId },
+        },
+      },
+    };
+
+    if (projectName) {
+      whereClause.project = {
+        name: { contains: projectName },
+      };
+    }
+
+    const task = await this.prisma.client.task.findFirst({
+      where: whereClause,
+    });
+
+    if (!task) {
+      throw new NotFoundException(
+        `Active task matching "${taskTitle}" ${projectName ? `in project "${projectName}"` : ''} not found in this workspace.`
+      );
+    }
+
+    return this.updateTask(task.id, userId, { status: 'done' });
+  }
+
+  async searchWorkspaceUsers(userId: string, workspaceId: string, query?: string, limit = 20, page = 1) {
+    const take = Math.min(Math.max(limit, 1), 100);
+    const skip = (Math.max(page, 1) - 1) * take;
+
+    const whereClause: any = {
+      channelMemberships: {
+        some: {
+          channel: {
+            workspaceId,
+          },
+        },
+      },
+    };
+
+    if (query && query.trim()) {
+      whereClause.OR = [
+        { name: { contains: query } },
+        { email: { contains: query } },
+      ];
+    }
+
+    return this.prisma.client.user.findMany({
+      where: whereClause,
+      take,
+      skip,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatarUrl: true,
+        role: true,
+        status: true,
+        lastSeenAt: true,
+      },
+    });
+  }
+
+  async scheduleMessage(
+    userId: string,
+    workspaceId: string,
+    targetName: string,
+    isGroup: boolean,
+    content: string,
+    scheduledTimeStr: string,
+  ) {
+    const scheduledAt = new Date(scheduledTimeStr);
+    if (isNaN(scheduledAt.getTime())) {
+      throw new BadRequestException(`Invalid scheduled date-time: "${scheduledTimeStr}"`);
+    }
+
+    let targetChannelId: string | null = null;
+    let recipientUser: any = null;
+
+    if (isGroup) {
+      const channel = await this.prisma.client.channel.findFirst({
+        where: {
+          workspaceId,
+          name: { contains: targetName },
+        },
+      });
+      if (!channel) {
+        throw new NotFoundException(`Channel "${targetName}" not found in this workspace.`);
+      }
+      targetChannelId = channel.id;
+    } else {
+      recipientUser = await this.prisma.client.user.findFirst({
+        where: {
+          OR: [
+            { name: { contains: targetName } },
+            { email: { contains: targetName } },
+          ],
+          channelMemberships: {
+            some: {
+              channel: { workspaceId },
+            },
+          },
+        },
+      });
+      if (!recipientUser) {
+        throw new NotFoundException(`User "${targetName}" not found in this workspace.`);
+      }
+
+      const dmChannel = await this.getOrCreateDMChannel(userId, recipientUser.id);
+      targetChannelId = dmChannel.id;
+    }
+
+    return this.prisma.client.scheduledMessage.create({
+      data: {
+        channelId: targetChannelId,
+        userId,
+        scheduledBy: userId,
+        createdViaAI: true,
+        content,
+        scheduledAt,
+        timezone: 'UTC',
+      },
+      include: {
+        channel: { select: { id: true, name: true, type: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
     });
   }
 }
