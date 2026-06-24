@@ -249,13 +249,18 @@ export class ChatService {
     };
 
     if (hasQuery) {
-      whereClause.AND.push({
-        OR: [
-          { name: { startsWith: query } },
-          { name: { contains: ' ' + query } },
-          { email: { startsWith: query } },
-        ],
-      });
+      if (query.length === 1) {
+        whereClause.AND.push({
+          name: { startsWith: query }
+        });
+      } else {
+        whereClause.AND.push({
+          OR: [
+            { name: { contains: query } },
+            { email: { contains: query } },
+          ],
+        });
+      }
     }
 
     if (!isOnlyDefault) {
@@ -267,9 +272,9 @@ export class ChatService {
       });
     }
 
-    return this.prisma.client.user.findMany({
+    const users = await this.prisma.client.user.findMany({
       where: whereClause,
-      take: 15,
+      take: 50,
       select: {
         id: true,
         name: true,
@@ -279,6 +284,35 @@ export class ChatService {
         status: true,
       },
     });
+
+    if (!hasQuery) return users.slice(0, 15);
+
+    const qLower = query.toLowerCase();
+
+    const sortedUsers = users.sort((a, b) => {
+      const aNameLower = a.name.toLowerCase();
+      const bNameLower = b.name.toLowerCase();
+      const aEmailLower = a.email.toLowerCase();
+      const bEmailLower = b.email.toLowerCase();
+
+      const getScore = (name: string, email: string) => {
+        if (name === qLower) return 4;
+        if (name.startsWith(qLower)) return 3;
+        if (name.includes(qLower)) return 2;
+        if (email.includes(qLower)) return 1;
+        return 0;
+      };
+
+      const scoreA = getScore(aNameLower, aEmailLower);
+      const scoreB = getScore(bNameLower, bEmailLower);
+
+      if (scoreA !== scoreB) {
+        return scoreB - scoreA;
+      }
+      return aNameLower.localeCompare(bNameLower);
+    });
+
+    return sortedUsers.slice(0, 15);
   }
 
   // Returns or creates a deterministic DM channel between two users
