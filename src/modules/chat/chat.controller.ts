@@ -294,6 +294,58 @@ export class ChatController {
     return { success: true };
   }
 
+  @Post('projects/:projectId/sprints')
+  @ApiOperation({ summary: 'Create a sprint for a project' })
+  async createSprint(
+    @Param('projectId') projectId: string,
+    @Body() body: { name: string; startDate?: string; endDate?: string },
+    @Req() req: any,
+  ) {
+    if (!body.name || !body.name.trim()) {
+      throw new BadRequestException('Sprint name is required');
+    }
+    return this.chatService.createSprint(projectId, req.user.id, body);
+  }
+
+  @Patch('projects/:projectId/sprints/:sprintName')
+  @ApiOperation({ summary: 'Update a sprint status' })
+  async updateSprint(
+    @Param('projectId') projectId: string,
+    @Param('sprintName') sprintName: string,
+    @Body() body: { status: string },
+    @Req() req: any,
+  ) {
+    if (!body.status) {
+      throw new BadRequestException('Sprint status is required');
+    }
+    return this.chatService.updateSprint(projectId, sprintName, body.status, req.user.id);
+  }
+
+  @Delete('projects/:projectId/sprints/:sprintName')
+  @ApiOperation({ summary: 'Delete a sprint from a project' })
+  async deleteSprint(
+    @Param('projectId') projectId: string,
+    @Param('sprintName') sprintName: string,
+    @Req() req: any,
+  ) {
+    return this.chatService.deleteSprint(projectId, sprintName, req.user.id);
+  }
+
+  @Patch('messages/:messageId')
+  @ApiOperation({ summary: 'Edit a message' })
+  async editMessage(
+    @Param('messageId') messageId: string,
+    @Body('content') content: string,
+    @Req() req: any,
+  ) {
+    if (!content || !content.trim()) {
+      throw new BadRequestException('Content is required');
+    }
+    const updated = await this.chatService.editMessage(messageId, content.trim(), req.user.id);
+    this.chatGateway.broadcastMessageEdit(updated.channelId, updated);
+    return updated;
+  }
+
   @Delete('messages/:messageId')
   @ApiOperation({ summary: 'Delete a message' })
   async deleteMessage(@Param('messageId') messageId: string, @Req() req: any) {

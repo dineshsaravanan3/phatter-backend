@@ -17,7 +17,7 @@ import { UseFilters } from '@nestjs/common';
 @WebSocketGateway({
   cors: {
     origin: (requestOrigin, callback) => {
-      const defaultOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://phatter.vercel.app', 'https://collab.firebeam.space'];
+      const defaultOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://phatter.vercel.app'];
       const allowedOrigins = process.env.FRONTEND_URL
         ? [...defaultOrigins, ...process.env.FRONTEND_URL.split(',').map(o => o.trim().replace(/\/$/, ''))]
         : defaultOrigins;
@@ -289,10 +289,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // Helper method to broadcast newly created messages to active room members
   async broadcastNewMessage(channelId: string, message: any, tempId?: string) {
     try {
-      const members = await this.prisma.client.channelMember.findMany({
-        where: { channelId },
-        select: { userId: true },
-      });
+      const [members, channel] = await Promise.all([
+        this.prisma.client.channelMember.findMany({
+          where: { channelId },
+          select: { userId: true },
+        }),
+        this.prisma.client.channel.findUnique({
+          where: { id: channelId },
+          select: { name: true, type: true },
+        }),
+      ]);
+
+      const channelName = channel && channel.type !== 'dm' ? channel.name : undefined;
 
       for (const member of members) {
         this.server.to(`user:${member.userId}`).emit('new_message', {
@@ -305,6 +313,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           this.server.to(`user:${member.userId}`).emit('notification:new', {
             type: 'message',
             channelId,
+            channelName,
             senderId: message.senderId,
             senderName: message.senderName,
             senderAvatar: message.senderAvatar ?? null,
@@ -393,6 +402,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.to(`channel:${channelId}`).emit('message:delete', {
       channelId,
       messageId,
+    });
+  }
+
+  broadcastMessageEdit(channelId: string, message: any) {
+    this.server.to(`channel:${channelId}`).emit('message:edit', {
+      channelId,
+      message,
     });
   }
 }

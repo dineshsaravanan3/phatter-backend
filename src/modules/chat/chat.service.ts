@@ -628,7 +628,7 @@ export class ChatService {
         const file = msg.files[0] || null;
 
         // Group reactions by emoji
-        const reactionGroupMap = new Map<string, { emoji: string; count: number; users: string[]; hasReacted: boolean }>();
+        const reactionGroupMap = new Map<string, { emoji: string; count: number; users: string[]; userIds: string[]; hasReacted: boolean }>();
         for (const rx of msg.messageReactions || []) {
           const key = rx.emoji;
           if (!reactionGroupMap.has(key)) {
@@ -636,12 +636,14 @@ export class ChatService {
               emoji: key,
               count: 0,
               users: [],
+              userIds: [],
               hasReacted: false,
             });
           }
           const group = reactionGroupMap.get(key)!;
           group.count += 1;
           group.users.push(rx.user.name);
+          group.userIds.push(rx.userId);
           if (rx.userId === userId) {
             group.hasReacted = true;
           }
@@ -650,10 +652,12 @@ export class ChatService {
         return {
           id: msg.id,
           text: msg.content,
+          senderId: msg.userId,
           senderName: msg.user.name,
           senderAvatar: msg.user.avatarUrl || undefined,
           timestamp: new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           createdAt: msg.createdAt.toISOString(),
+          editedAt: msg.editedAt ? msg.editedAt.toISOString() : undefined,
           isSelf: msg.userId === userId,
           parentId: msg.parentId || undefined,
           isPinned: msg.isPinned,
@@ -729,10 +733,11 @@ export class ChatService {
 
   async getTasks(channelId: string, userId: string) {
     await this.validateMembership(channelId, userId);
-    return this.prisma.client.task.findMany({
+    const tasks = await this.prisma.client.task.findMany({
       where: { channelId, deletedAt: null },
       orderBy: { position: 'asc' },
       include: {
+        sprint: true,
         assignee: {
           select: {
             id: true,
@@ -751,6 +756,10 @@ export class ChatService {
         },
       },
     });
+    return tasks.map(task => ({
+      ...task,
+      sprint: task.sprint ? task.sprint.name : null,
+    }));
   }
 
   async createTask(
@@ -776,7 +785,29 @@ export class ChatService {
     });
     const position = maxTask ? maxTask.position + 1 : 0;
 
-    return this.prisma.client.task.create({
+    let sprintId: string | null = null;
+    if (body.sprint) {
+      const project = await this.prisma.client.project.findFirst({
+        where: { channelId },
+      });
+      if (project) {
+        let sprintRecord = await this.prisma.client.sprint.findFirst({
+          where: { projectId: project.id, name: body.sprint },
+        });
+        if (!sprintRecord) {
+          sprintRecord = await this.prisma.client.sprint.create({
+            data: {
+              name: body.sprint,
+              projectId: project.id,
+              status: 'active',
+            },
+          });
+        }
+        sprintId = sprintRecord.id;
+      }
+    }
+
+    const task = await this.prisma.client.task.create({
       data: {
         channelId,
         createdBy: creatorId,
@@ -787,9 +818,10 @@ export class ChatService {
         assignedTo: assigneeId,
         position,
         aiSuggested: false,
-        sprintId: body.sprint || null,
+        sprintId,
       },
       include: {
+        sprint: true,
         assignee: {
           select: {
             id: true,
@@ -808,6 +840,11 @@ export class ChatService {
         },
       },
     });
+
+    return {
+      ...task,
+      sprint: task.sprint ? task.sprint.name : null,
+    };
   }
 
   async updateTask(
@@ -829,12 +866,43 @@ export class ChatService {
     if (body.priority !== undefined) updateData.priority = body.priority;
     if (body.assignedTo !== undefined) updateData.assignedTo = body.assignedTo;
     if (body.dueDate !== undefined) updateData.dueDate = body.dueDate ? new Date(body.dueDate) : null;
-    if (body.sprint !== undefined) updateData.sprintId = body.sprint;
+    
+    if (body.sprint !== undefined) {
+      if (body.sprint === null || body.sprint === '') {
+        updateData.sprintId = null;
+      } else {
+        let projectId = task.projectId;
+        if (!projectId) {
+          const project = await this.prisma.client.project.findFirst({
+            where: { channelId: task.channelId },
+          });
+          if (project) projectId = project.id;
+        }
+        if (projectId) {
+          let sprintRecord = await this.prisma.client.sprint.findFirst({
+            where: { projectId, name: body.sprint },
+          });
+          if (!sprintRecord) {
+            sprintRecord = await this.prisma.client.sprint.create({
+              data: {
+                name: body.sprint,
+                projectId,
+                status: 'active',
+              },
+            });
+          }
+          updateData.sprintId = sprintRecord.id;
+        } else {
+          updateData.sprintId = null;
+        }
+      }
+    }
 
-    return this.prisma.client.task.update({
+    const updatedTask = await this.prisma.client.task.update({
       where: { id: taskId },
       data: updateData,
       include: {
+        sprint: true,
         assignee: {
           select: {
             id: true,
@@ -853,6 +921,11 @@ export class ChatService {
         },
       },
     });
+
+    return {
+      ...updatedTask,
+      sprint: updatedTask.sprint ? updatedTask.sprint.name : null,
+    };
   }
 
   async createChannel(
@@ -1089,7 +1162,7 @@ export class ChatService {
       },
     });
 
-    const reactionGroupMap = new Map<string, { emoji: string; count: number; users: string[]; hasReacted: boolean }>();
+    const reactionGroupMap = new Map<string, { emoji: string; count: number; users: string[]; userIds: string[]; hasReacted: boolean }>();
     for (const rx of allReactions) {
       const key = rx.emoji;
       if (!reactionGroupMap.has(key)) {
@@ -1097,12 +1170,14 @@ export class ChatService {
           emoji: key,
           count: 0,
           users: [],
+          userIds: [],
           hasReacted: false,
         });
       }
       const group = reactionGroupMap.get(key)!;
       group.count += 1;
       group.users.push(rx.user.name);
+      group.userIds.push(rx.userId);
       if (rx.userId === userId) {
         group.hasReacted = true;
       }
@@ -1138,6 +1213,56 @@ export class ChatService {
     });
 
     return updated;
+  }
+
+  async editMessage(messageId: string, content: string, userId: string) {
+    const message = await this.prisma.client.message.findUnique({
+      where: { id: messageId },
+      include: { channel: true },
+    });
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+    await this.validateMembership(message.channelId, userId);
+
+    if (message.userId !== userId) {
+      throw new ForbiddenException('You can only edit your own messages');
+    }
+    if (message.deletedAt) {
+      throw new BadRequestException('Cannot edit a deleted message');
+    }
+
+    const updated = await this.prisma.client.message.update({
+      where: { id: messageId },
+      data: {
+        content,
+        editedAt: new Date(),
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
+
+    return {
+      id: updated.id,
+      text: updated.content,
+      senderId: updated.userId,
+      senderName: updated.user.name,
+      senderAvatar: updated.user.avatarUrl || undefined,
+      timestamp: new Date(updated.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAt: updated.createdAt.toISOString(),
+      editedAt: updated.editedAt ? updated.editedAt.toISOString() : undefined,
+      isSelf: false,
+      channelId: updated.channelId,
+      parentId: updated.parentId || undefined,
+      isSystem: false,
+    };
   }
 
   // --- PROJECT MANAGEMENT SERVICES ---
@@ -1194,6 +1319,7 @@ export class ChatService {
             status: true,
           },
         },
+        sprints: true,
       },
     });
 
@@ -1226,6 +1352,12 @@ export class ChatService {
         members,
         channelId: p.channelId,
         creator: p.creator,
+        sprints: p.sprints.map(s => ({
+          name: s.name,
+          startDate: s.startDate ? s.startDate.toISOString() : null,
+          endDate: s.endDate ? s.endDate.toISOString() : null,
+          status: s.status,
+        })),
       };
     });
   }
@@ -1451,6 +1583,98 @@ export class ChatService {
     }
 
     return { success: true };
+  }
+
+  async createSprint(
+    projectId: string,
+    userId: string,
+    body: { name: string; startDate?: string; endDate?: string },
+  ) {
+    const project = await this.prisma.client.project.findUnique({
+      where: { id: projectId },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+
+    const existing = await this.prisma.client.sprint.findFirst({
+      where: { projectId, name: body.name },
+    });
+    if (existing) {
+      throw new BadRequestException('Sprint name already exists in this project');
+    }
+
+    const sprint = await this.prisma.client.sprint.create({
+      data: {
+        name: body.name,
+        projectId,
+        startDate: body.startDate ? new Date(body.startDate) : null,
+        endDate: body.endDate ? new Date(body.endDate) : null,
+        status: 'active',
+      },
+    });
+
+    return {
+      name: sprint.name,
+      startDate: sprint.startDate ? sprint.startDate.toISOString() : null,
+      endDate: sprint.endDate ? sprint.endDate.toISOString() : null,
+      status: sprint.status,
+    };
+  }
+
+  async deleteSprint(projectId: string, sprintName: string, userId: string) {
+    const project = await this.prisma.client.project.findUnique({
+      where: { id: projectId },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+
+    const sprint = await this.prisma.client.sprint.findFirst({
+      where: { projectId, name: sprintName },
+    });
+    if (!sprint) {
+      throw new NotFoundException('Sprint not found');
+    }
+
+    await this.prisma.client.task.updateMany({
+      where: { sprintId: sprint.id },
+      data: { sprintId: null },
+    });
+
+    await this.prisma.client.sprint.delete({
+      where: { id: sprint.id },
+    });
+
+    return { success: true };
+  }
+
+  async updateSprint(projectId: string, sprintName: string, status: string, userId: string) {
+    const project = await this.prisma.client.project.findUnique({
+      where: { id: projectId },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+
+    const sprint = await this.prisma.client.sprint.findFirst({
+      where: { projectId, name: sprintName },
+    });
+    if (!sprint) {
+      throw new NotFoundException('Sprint not found');
+    }
+
+    const updated = await this.prisma.client.sprint.update({
+      where: { id: sprint.id },
+      data: { status },
+    });
+
+    return {
+      name: updated.name,
+      startDate: updated.startDate ? updated.startDate.toISOString() : null,
+      endDate: updated.endDate ? updated.endDate.toISOString() : null,
+      status: updated.status,
+    };
   }
 
   async removeProjectMember(projectId: string, memberId: string, currentUserId: string) {
