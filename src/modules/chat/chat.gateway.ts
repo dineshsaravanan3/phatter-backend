@@ -17,7 +17,7 @@ import { UseFilters } from '@nestjs/common';
 @WebSocketGateway({
   cors: {
     origin: (requestOrigin, callback) => {
-      const defaultOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://phatter.vercel.app'];
+      const defaultOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://phatter.vercel.app', 'https://collab.firebeam.space'];
       const allowedOrigins = process.env.FRONTEND_URL
         ? [...defaultOrigins, ...process.env.FRONTEND_URL.split(',').map(o => o.trim().replace(/\/$/, ''))]
         : defaultOrigins;
