@@ -10,11 +10,17 @@ import {
   Req,
   UseGuards,
   BadRequestException,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { join } from 'path';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { ChatService } from './chat.service';
 import { ChatGateway } from './chat.gateway';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 
 @ApiTags('Chat')
 @ApiBearerAuth()
@@ -34,11 +40,17 @@ export class ChatController {
 
   @Post('dm')
   @ApiOperation({ summary: 'Get or create a DM channel with a user' })
-  async getOrCreateDM(@Body('targetUserId') targetUserId: string, @Req() req: any) {
+  async getOrCreateDM(
+    @Body('targetUserId') targetUserId: string,
+    @Req() req: any,
+  ) {
     if (!targetUserId) {
       throw new BadRequestException('Target user ID is required');
     }
-    const channel = await this.chatService.getOrCreateDMChannel(req.user.id, targetUserId);
+    const channel = await this.chatService.getOrCreateDMChannel(
+      req.user.id,
+      targetUserId,
+    );
     // Do not broadcast conversation:created for direct messages to avoid premature empty conversation loading on target user's screen.
     // The conversation will show up for target user on their first message event.
     return channel;
@@ -52,7 +64,9 @@ export class ChatController {
   }
 
   @Get('channels/:channelId/messages')
-  @ApiOperation({ summary: 'Get messages for a channel with cursor pagination' })
+  @ApiOperation({
+    summary: 'Get messages for a channel with cursor pagination',
+  })
   async getMessages(
     @Param('channelId') channelId: string,
     @Query('cursor') cursor: string,
@@ -60,7 +74,12 @@ export class ChatController {
     @Req() req: any,
   ) {
     const parsedLimit = limit ? parseInt(limit, 10) : 20;
-    return this.chatService.getMessages(channelId, req.user.id, cursor, parsedLimit);
+    return this.chatService.getMessages(
+      channelId,
+      req.user.id,
+      cursor,
+      parsedLimit,
+    );
   }
 
   @Post('channels/:channelId/messages')
@@ -70,13 +89,19 @@ export class ChatController {
     @Body('content') content: string,
     @Body('tempId') tempId: string,
     @Body('parentId') parentId: string,
+    @Body('mentionedUserIds') mentionedUserIds: string[],
     @Req() req: any,
   ) {
     if (!content || !content.trim()) {
       throw new BadRequestException('Message content cannot be empty');
     }
 
-    const message = await this.chatService.saveMessage(channelId, req.user.id, content, parentId);
+    const message = await this.chatService.saveMessage(
+      channelId,
+      req.user.id,
+      content,
+      parentId,
+    );
 
     // Format the response structure to match the frontend expectations
     const formattedMessage = {
@@ -85,7 +110,10 @@ export class ChatController {
       senderId: message.userId,
       senderName: message.user.name,
       senderAvatar: message.user.avatarUrl || undefined,
-      timestamp: new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: new Date(message.createdAt).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
       createdAt: message.createdAt.toISOString(),
       isSelf: false, // Recipients see it as not self
       channelId,
@@ -94,7 +122,7 @@ export class ChatController {
     };
 
     // Broadcast the message via WebSockets to all connected clients in the room
-    this.chatGateway.broadcastNewMessage(channelId, formattedMessage, tempId);
+    this.chatGateway.broadcastNewMessage(channelId, formattedMessage, tempId, mentionedUserIds);
 
     // Return the message with isSelf = true for the poster
     return {
@@ -122,17 +150,35 @@ export class ChatController {
   @ApiOperation({ summary: 'Create a task in a channel' })
   async createTask(
     @Param('channelId') channelId: string,
-    @Body() body: { title: string; priority: string; assignedToEmail?: string; assignedTo?: string; dueDate?: string; sprint?: string },
+    @Body()
+    body: {
+      title: string;
+      priority: string;
+      assignedToEmail?: string;
+      assignedTo?: string;
+      dueDate?: string;
+      sprint?: string;
+    },
     @Req() req: any,
   ) {
     return this.chatService.createTask(channelId, req.user.id, body);
   }
 
   @Patch('tasks/:taskId')
-  @ApiOperation({ summary: 'Update task properties or toggle completion status' })
+  @ApiOperation({
+    summary: 'Update task properties or toggle completion status',
+  })
   async updateTask(
     @Param('taskId') taskId: string,
-    @Body() body: { status?: string; title?: string; priority?: string; assignedTo?: string },
+    @Body()
+    body: {
+      status?: string;
+      title?: string;
+      priority?: string;
+      assignedTo?: string;
+      dueDate?: string | null;
+      sprint?: string | null;
+    },
     @Req() req: any,
   ) {
     return this.chatService.updateTask(taskId, req.user.id, body);
@@ -141,7 +187,13 @@ export class ChatController {
   @Post('channel')
   @ApiOperation({ summary: 'Create a public/private channel' })
   async createChannel(
-    @Body() body: { name: string; description?: string; type: 'public' | 'private'; memberIds?: string[] },
+    @Body()
+    body: {
+      name: string;
+      description?: string;
+      type: 'public' | 'private';
+      memberIds?: string[];
+    },
     @Req() req: any,
   ) {
     if (!body.name || !body.name.trim()) {
@@ -164,7 +216,11 @@ export class ChatController {
     if (!body.name || !body.name.trim()) {
       throw new BadRequestException('Group chat name is required');
     }
-    if (!body.memberIds || !Array.isArray(body.memberIds) || body.memberIds.length === 0) {
+    if (
+      !body.memberIds ||
+      !Array.isArray(body.memberIds) ||
+      body.memberIds.length === 0
+    ) {
       throw new BadRequestException('At least one member must be invited');
     }
     const channel = await this.chatService.createGroupChat(req.user.id, body);
@@ -182,7 +238,12 @@ export class ChatController {
     if (!memberIds || !Array.isArray(memberIds) || memberIds.length === 0) {
       throw new BadRequestException('memberIds must be a non-empty array');
     }
-    const { channel, systemMessage } = await this.chatService.addMembersToChannel(req.user.id, channelId, memberIds);
+    const { channel, systemMessage } =
+      await this.chatService.addMembersToChannel(
+        req.user.id,
+        channelId,
+        memberIds,
+      );
     this.chatGateway.broadcastNewConversation(channel);
 
     if (systemMessage) {
@@ -192,7 +253,10 @@ export class ChatController {
         senderId: systemMessage.userId,
         senderName: systemMessage.user.name,
         senderAvatar: systemMessage.user.avatarUrl || undefined,
-        timestamp: new Date(systemMessage.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: new Date(systemMessage.createdAt).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
         createdAt: systemMessage.createdAt.toISOString(),
         isSelf: false,
         channelId,
@@ -207,8 +271,15 @@ export class ChatController {
   @Patch('messages/:messageId/pin')
   @ApiOperation({ summary: 'Pin or unpin a message' })
   async togglePin(@Param('messageId') messageId: string, @Req() req: any) {
-    const updated = await this.chatService.toggleMessagePin(messageId, req.user.id);
-    this.chatGateway.broadcastMessagePin(updated.channelId, messageId, updated.isPinned);
+    const updated = await this.chatService.toggleMessagePin(
+      messageId,
+      req.user.id,
+    );
+    this.chatGateway.broadcastMessagePin(
+      updated.channelId,
+      messageId,
+      updated.isPinned,
+    );
     return updated;
   }
 
@@ -222,8 +293,16 @@ export class ChatController {
     if (!emoji) {
       throw new BadRequestException('Emoji is required');
     }
-    const result = await this.chatService.toggleMessageReaction(messageId, req.user.id, emoji);
-    this.chatGateway.broadcastMessageReaction(result.channelId, messageId, result.reactions);
+    const result = await this.chatService.toggleMessageReaction(
+      messageId,
+      req.user.id,
+      emoji,
+    );
+    this.chatGateway.broadcastMessageReaction(
+      result.channelId,
+      messageId,
+      result.reactions,
+    );
     return result;
   }
 
@@ -239,7 +318,14 @@ export class ChatController {
   @ApiOperation({ summary: 'Create a new project' })
   async createProject(
     @Req() req: any,
-    @Body() body: { name: string; description?: string; dueDate?: string; securityLevel?: string; invitedEmails?: string[] },
+    @Body()
+    body: {
+      name: string;
+      description?: string;
+      dueDate?: string;
+      securityLevel?: string;
+      invitedEmails?: string[];
+    },
   ) {
     if (!body.name || !body.name.trim()) {
       throw new BadRequestException('Project name is required');
@@ -252,17 +338,21 @@ export class ChatController {
   async updateProject(
     @Param('id') projectId: string,
     @Req() req: any,
-    @Body() body: { name?: string; description?: string; dueDate?: string; securityLevel?: string; status?: 'active' | 'archived' },
+    @Body()
+    body: {
+      name?: string;
+      description?: string;
+      dueDate?: string;
+      securityLevel?: string;
+      status?: 'active' | 'archived';
+    },
   ) {
     return this.chatService.updateProject(projectId, req.user.id, body);
   }
 
   @Delete('projects/:id')
   @ApiOperation({ summary: 'Delete a project' })
-  async deleteProject(
-    @Param('id') projectId: string,
-    @Req() req: any,
-  ) {
+  async deleteProject(@Param('id') projectId: string, @Req() req: any) {
     return this.chatService.deleteProject(projectId, req.user.id);
   }
 
@@ -273,7 +363,11 @@ export class ChatController {
     @Param('memberId') memberId: string,
     @Req() req: any,
   ) {
-    const result = await this.chatService.removeProjectMember(projectId, memberId, req.user.id);
+    const result = await this.chatService.removeProjectMember(
+      projectId,
+      memberId,
+      req.user.id,
+    );
 
     if (result.systemMessage && result.channelId) {
       const formattedMessage = {
@@ -282,7 +376,10 @@ export class ChatController {
         senderId: result.systemMessage.userId,
         senderName: result.systemMessage.user.name,
         senderAvatar: result.systemMessage.user.avatarUrl || undefined,
-        timestamp: new Date(result.systemMessage.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: new Date(result.systemMessage.createdAt).toLocaleTimeString(
+          [],
+          { hour: '2-digit', minute: '2-digit' },
+        ),
         createdAt: result.systemMessage.createdAt.toISOString(),
         isSelf: false,
         channelId: result.channelId,
@@ -292,6 +389,25 @@ export class ChatController {
     }
 
     return { success: true };
+  }
+
+  @Patch('projects/:projectId/members/:memberId/roles')
+  @ApiOperation({ summary: 'Update custom roles of a project member' })
+  async updateProjectMemberRoles(
+    @Param('projectId') projectId: string,
+    @Param('memberId') memberId: string,
+    @Body('roles') roles: any[],
+    @Req() req: any,
+  ) {
+    if (!Array.isArray(roles)) {
+      throw new BadRequestException('Roles must be an array');
+    }
+    return this.chatService.updateProjectMemberRoles(
+      projectId,
+      memberId,
+      roles,
+      req.user.id,
+    );
   }
 
   @Post('projects/:projectId/sprints')
@@ -348,9 +464,18 @@ export class ChatController {
 
   @Delete('messages/:messageId')
   @ApiOperation({ summary: 'Delete a message' })
-  async deleteMessage(@Param('messageId') messageId: string, @Req() req: any) {
-    const updated = await this.chatService.deleteMessage(messageId, req.user.id);
-    this.chatGateway.broadcastMessageDeletion(updated.channelId, messageId);
+  async deleteMessage(
+    @Param('messageId') messageId: string,
+    @Query('everyone') everyone: string,
+    @Req() req: any,
+  ) {
+    const deleteForEveryone = everyone === 'true';
+    const updated = await this.chatService.deleteMessage(messageId, req.user.id, deleteForEveryone);
+    if ((updated as any).isDeleteForMeOnly) {
+      this.chatGateway.broadcastMessageDeletionToUser(req.user.id, updated.channelId, messageId);
+    } else {
+      this.chatGateway.broadcastMessageDeletion(updated.channelId, messageId);
+    }
     return { success: true };
   }
 
@@ -359,5 +484,85 @@ export class ChatController {
   async deleteTask(@Param('taskId') taskId: string, @Req() req: any) {
     await this.chatService.deleteTask(taskId, req.user.id);
     return { success: true };
+  }
+
+  @Post('upload-voice')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        audio: { type: 'string', format: 'binary' },
+        channelId: { type: 'string' },
+        duration: { type: 'number' },
+      },
+      required: ['audio', 'channelId'],
+    },
+  })
+  @ApiOperation({ summary: 'Upload a voice note and create message' })
+  @UseInterceptors(
+    FileInterceptor('audio', {
+      storage: memoryStorage(),
+      limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
+      fileFilter: (req, file, cb) => {
+        const cleanMime = file.mimetype.split(';')[0].trim();
+        if (
+          cleanMime === 'audio/webm' ||
+          cleanMime === 'audio/mp4' ||
+          cleanMime === 'audio/aac'
+        ) {
+          cb(null, true);
+        } else {
+          cb(
+            new BadRequestException(
+              `Only audio/webm, audio/mp4, and audio/aac are allowed. Received: ${file.mimetype}`,
+            ),
+            false,
+          );
+        }
+      },
+    }),
+  )
+  async uploadVoice(
+    @UploadedFile() file: any,
+    @Body('channelId') channelId: string,
+    @Body('duration') durationStr: string,
+    @Req() req: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No audio file provided');
+    }
+    if (!channelId) {
+      throw new BadRequestException('Channel ID is required');
+    }
+
+    const duration = durationStr ? parseInt(durationStr, 10) : 0;
+
+    const result = await this.chatService.uploadVoiceNote(
+      file,
+      channelId,
+      duration,
+      req.user.id,
+    );
+
+    // Broadcast the message via WebSockets to all connected clients in the room
+    this.chatGateway.broadcastNewMessage(channelId, {
+      ...result.message,
+      isSelf: false, // Recipients see it as not self
+      channelId,
+      isSystem: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    return result;
+  }
+
+  @Post('conversations/:channelId/favorite')
+  @ApiOperation({ summary: 'Toggle favorite state for a conversation' })
+  async toggleFavorite(
+    @Param('channelId') channelId: string,
+    @Req() req: any,
+  ) {
+    return this.chatService.toggleFavorite(channelId, req.user.id);
   }
 }

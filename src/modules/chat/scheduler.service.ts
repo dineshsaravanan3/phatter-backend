@@ -7,6 +7,7 @@ import { ChatService } from './chat.service';
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private scheduledMessageInterval: NodeJS.Timeout | null = null;
   private actionCleanupInterval: NodeJS.Timeout | null = null;
+  private isProcessing = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -31,6 +32,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   // Transactionally locks and processes scheduled messages to prevent duplicate delivery
   async processScheduledMessages() {
+    if (this.isProcessing) {
+      console.log('[SchedulerService] Poller run skipped: a previous run is still in progress.');
+      return;
+    }
+
+    this.isProcessing = true;
+    const startTime = Date.now();
+    console.log('[SchedulerService] Starting scheduled messages poller run...');
+
     try {
       const now = new Date();
 
@@ -44,7 +54,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             scheduledAt: { lte: now }
           },
           take: 10,
-          select: { id: true }
+          select: {
+            id: true,
+            channelId: true,
+            scheduledBy: true,
+            content: true
+          }
         });
 
         if (pending.length === 0) return [];
@@ -57,19 +72,18 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           data: { processing: true }
         });
 
-        return ids;
+        return pending;
+      }, {
+        maxWait: 5000,
+        timeout: 10000
       });
 
-      if (messagesToProcess.length === 0) return;
+      if (messagesToProcess.length === 0) {
+        return;
+      }
 
-      for (const id of messagesToProcess) {
+      for (const sm of messagesToProcess) {
         try {
-          const sm = await this.prisma.client.scheduledMessage.findUnique({
-            where: { id }
-          });
-
-          if (!sm) continue;
-
           // Deliver message using ChatService rules (as the user who scheduled it)
           const message = await this.chatService.saveMessage(sm.channelId, sm.scheduledBy, sm.content);
 
@@ -92,21 +106,25 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
           // Update message state to sent
           await this.prisma.client.scheduledMessage.update({
-            where: { id },
+            where: { id: sm.id },
             data: { sent: true, processing: false }
           });
 
         } catch (err) {
-          console.error(`Failed to process scheduled message ${id}:`, err);
+          console.error(`Failed to process scheduled message ${sm.id}:`, err);
           // Release lock on failure
           await this.prisma.client.scheduledMessage.update({
-            where: { id },
+            where: { id: sm.id },
             data: { processing: false }
           }).catch(console.error);
         }
       }
     } catch (error) {
       console.error('Error running scheduled messages poller:', error);
+    } finally {
+      this.isProcessing = false;
+      const duration = Date.now() - startTime;
+      console.log(`[SchedulerService] Finished scheduled messages poller run. Duration: ${duration}ms`);
     }
   }
 

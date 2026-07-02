@@ -10,12 +10,7 @@ async function bootstrap() {
   // Enable CORS
   app.enableCors({
     origin: (requestOrigin, callback) => {
-      const defaultOrigins = [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-        'https://phatter.vercel.app',
-        'https://collab.firebeam.space',
-      ];
+      const defaultOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://phatter.vercel.app', 'https://collab.firebeam.space'];
       const allowedOrigins = process.env.FRONTEND_URL
         ? [...defaultOrigins, ...process.env.FRONTEND_URL.split(',').map(o => o.trim().replace(/\/$/, ''))]
         : defaultOrigins;
@@ -31,7 +26,12 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-client-type', 'x-device-id'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-client-type',
+      'x-device-id',
+    ],
   });
 
   // Cookie Parser
@@ -48,7 +48,9 @@ async function bootstrap() {
   // Swagger Documentation Setup
   const config = new DocumentBuilder()
     .setTitle('CollabHQ Authentication API')
-    .setDescription('Production-ready multi-client JWT and session authentication API documentation.')
+    .setDescription(
+      'Production-ready multi-client JWT and session authentication API documentation.',
+    )
     .setVersion('1.0')
     .addBearerAuth()
     .build();
@@ -58,6 +60,8 @@ async function bootstrap() {
   const port = process.env.PORT ?? 4000;
   await app.listen(port, '0.0.0.0');
   console.log(`Application is running on: http://localhost:${port}`);
-  console.log(`Swagger documentation is available at: http://localhost:${port}/api/docs`);
+  console.log(
+    `Swagger documentation is available at: http://localhost:${port}/api/docs`,
+  );
 }
 bootstrap();

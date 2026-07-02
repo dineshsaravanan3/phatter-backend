@@ -1,9 +1,16 @@
-import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
+import { join } from 'path';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class ChatService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   // Ensures a default workspace exists in the system to satisfy DB foreign keys
   async ensureDefaultWorkspace(userId: string): Promise<string> {
@@ -21,26 +28,35 @@ export class ChatService {
     return workspace.id;
   }
 
-  async ensureDefaultChannels(workspaceId: string, userId: string): Promise<void> {
+  async ensureDefaultChannels(
+    workspaceId: string,
+    userId: string,
+  ): Promise<void> {
     const mockUsers = [
       {
         email: 'sarah.jenkins@collabhq.com',
         name: 'Sarah Jenkins',
-        avatarUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuA7GMq0sMHM58XltYyz0GfvxT-Vg0x-DUjmSNLIu5J_vqVDLKNs2NCNoJQKPMBQqGPWfKU2nhs_lgf0Zng8GZpcvHFBsAa9aqYaGhFu5FiX1dllC8jRa1ZLvpTgfDDHwDyTOOtmj4P8Z17lPDGautCcmoXnNjHbGWxI41N6P-5q76MYBLPG-etgI-na5_xnHuAhLTkST9q1GtKWKlAqnDQLHrS6nWU-QwopacgWBjgpIDYDQyQiwbB5FrMC4yv25Mm8S3N3Lh8v0Ei4',
+        avatarUrl:
+          'https://lh3.googleusercontent.com/aida-public/AB6AXuA7GMq0sMHM58XltYyz0GfvxT-Vg0x-DUjmSNLIu5J_vqVDLKNs2NCNoJQKPMBQqGPWfKU2nhs_lgf0Zng8GZpcvHFBsAa9aqYaGhFu5FiX1dllC8jRa1ZLvpTgfDDHwDyTOOtmj4P8Z17lPDGautCcmoXnNjHbGWxI41N6P-5q76MYBLPG-etgI-na5_xnHuAhLTkST9q1GtKWKlAqnDQLHrS6nWU-QwopacgWBjgpIDYDQyQiwbB5FrMC4yv25Mm8S3N3Lh8v0Ei4',
         role: 'member',
-        passwordHash: '$2b$10$nSSDcSkbW5Gv/LzG/D/fyeaM5Z9lO5N.tF.32a.1P/6tBebpBvjLq',
+        passwordHash:
+          '$2b$10$nSSDcSkbW5Gv/LzG/D/fyeaM5Z9lO5N.tF.32a.1P/6tBebpBvjLq',
       },
       {
         email: 'marcus.chen@collabhq.com',
         name: 'Marcus Chen',
-        avatarUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuA2LfVxovcRokOAhHFoeZugJvcqrXq7zHW-c0WbQcrVXwoqIgA_brAB-kC0UaTUva4dUvMWl71XOa3kT7dGt8ptso2c58ClgPi4luU6W7ZfJnIok5YhrwG5sR6TWzzysaLMqFpyGLOsa7-spUB3kOMXQEc3z213wTwdrdi1EYncngL1TRqLvELJuYHxw5xZOk2DcDFcdl9Metkt8SvmqDuSCHOHPWOC1biNnclukBCeiXNyXbjczgFacr0Aq-HGoSeW9jgsJyB21WPP',
+        avatarUrl:
+          'https://lh3.googleusercontent.com/aida-public/AB6AXuA2LfVxovcRokOAhHFoeZugJvcqrXq7zHW-c0WbQcrVXwoqIgA_brAB-kC0UaTUva4dUvMWl71XOa3kT7dGt8ptso2c58ClgPi4luU6W7ZfJnIok5YhrwG5sR6TWzzysaLMqFpyGLOsa7-spUB3kOMXQEc3z213wTwdrdi1EYncngL1TRqLvELJuYHxw5xZOk2DcDFcdl9Metkt8SvmqDuSCHOHPWOC1biNnclukBCeiXNyXbjczgFacr0Aq-HGoSeW9jgsJyB21WPP',
         role: 'member',
-        passwordHash: '$2b$10$nSSDcSkbW5Gv/LzG/D/fyeaM5Z9lO5N.tF.32a.1P/6tBebpBvjLq',
+        passwordHash:
+          '$2b$10$nSSDcSkbW5Gv/LzG/D/fyeaM5Z9lO5N.tF.32a.1P/6tBebpBvjLq',
       },
     ];
 
     for (const u of mockUsers) {
-      const exists = await this.prisma.client.user.findUnique({ where: { email: u.email } });
+      const exists = await this.prisma.client.user.findUnique({
+        where: { email: u.email },
+      });
       if (!exists) {
         await this.prisma.client.user.create({
           data: {
@@ -57,10 +73,15 @@ export class ChatService {
     const defaultChannels = [
       { name: 'general', description: 'General announcements and chit-chat' },
       { name: 'product-design', description: 'Product design discussions' },
-      { name: 'engineering', description: 'Technical development and code chat' },
+      {
+        name: 'engineering',
+        description: 'Technical development and code chat',
+      },
     ];
 
-    const allUsers = await this.prisma.client.user.findMany({ select: { id: true } });
+    const allUsers = await this.prisma.client.user.findMany({
+      select: { id: true },
+    });
 
     for (const ch of defaultChannels) {
       let channel = await this.prisma.client.channel.findFirst({
@@ -95,10 +116,16 @@ export class ChatService {
       }
 
       if (ch.name === 'product-design') {
-        const msgCount = await this.prisma.client.message.count({ where: { channelId: channel.id } });
+        const msgCount = await this.prisma.client.message.count({
+          where: { channelId: channel.id },
+        });
         if (msgCount === 0) {
-          const sarah = await this.prisma.client.user.findUnique({ where: { email: 'sarah.jenkins@collabhq.com' } });
-          const marcus = await this.prisma.client.user.findUnique({ where: { email: 'marcus.chen@collabhq.com' } });
+          const sarah = await this.prisma.client.user.findUnique({
+            where: { email: 'sarah.jenkins@collabhq.com' },
+          });
+          const marcus = await this.prisma.client.user.findUnique({
+            where: { email: 'marcus.chen@collabhq.com' },
+          });
 
           if (sarah && marcus) {
             const baseTime = Date.now();
@@ -150,10 +177,16 @@ export class ChatService {
           }
         }
 
-        const taskCount = await this.prisma.client.task.count({ where: { channelId: channel.id } });
+        const taskCount = await this.prisma.client.task.count({
+          where: { channelId: channel.id },
+        });
         if (taskCount === 0) {
-          const sarah = await this.prisma.client.user.findUnique({ where: { email: 'sarah.jenkins@collabhq.com' } });
-          const marcus = await this.prisma.client.user.findUnique({ where: { email: 'marcus.chen@collabhq.com' } });
+          const sarah = await this.prisma.client.user.findUnique({
+            where: { email: 'sarah.jenkins@collabhq.com' },
+          });
+          const marcus = await this.prisma.client.user.findUnique({
+            where: { email: 'marcus.chen@collabhq.com' },
+          });
 
           if (sarah && marcus) {
             await this.prisma.client.task.createMany({
@@ -243,9 +276,7 @@ export class ChatService {
     const isOnlyDefault = workspaceIds.length === 1;
 
     const whereClause: any = {
-      AND: [
-        { id: { not: currentUserId } },
-      ],
+      AND: [{ id: { not: currentUserId } }],
     };
 
     if (hasQuery) {
@@ -267,7 +298,11 @@ export class ChatService {
       whereClause.AND.push({
         OR: [
           { workspacesCreated: { any: { id: { in: workspaceIds } } } },
-          { channelMemberships: { any: { channel: { workspaceId: { in: workspaceIds } } } } },
+          {
+            channelMemberships: {
+              any: { channel: { workspaceId: { in: workspaceIds } } },
+            },
+          },
         ],
       });
     }
@@ -414,6 +449,13 @@ export class ChatService {
             messages: {
               orderBy: { createdAt: 'desc' },
               take: 1,
+              include: {
+                userDeletedMessages: {
+                  where: {
+                    userId,
+                  },
+                },
+              },
             },
           },
         },
@@ -438,147 +480,209 @@ export class ChatService {
       },
     });
 
-    const lastReadMap = new Map(lastReadRecords.map((r) => [r.channelId, r.lastReadAt]));
-
-    const conversations = await Promise.all(
-      filteredMemberships.map(async (m) => {
-        const channel = m.channel;
-        const lastMessageRecord = channel.messages[0] || null;
-
-        // Query latest reaction in this channel
-        const latestReaction = await this.prisma.client.messageReaction.findFirst({
-          where: { message: { channelId: channel.id } },
-          orderBy: { createdAt: 'desc' },
-          include: {
-            message: true,
-          },
-        });
-
-        let isReactionNewer = false;
-        if (latestReaction) {
-          if (!lastMessageRecord || latestReaction.createdAt.getTime() > lastMessageRecord.createdAt.getTime()) {
-            isReactionNewer = true;
-          }
-        }
-
-        // 2. Short-circuit unread checks: only run database count if there are actual new unread messages
-        const lastReadAt = lastReadMap.get(channel.id) || new Date(0);
-        let unreadCount = 0;
-
-        if (lastMessageRecord && lastMessageRecord.userId !== userId) {
-          const lastMessageTime = new Date(lastMessageRecord.createdAt).getTime();
-          if (lastMessageTime > lastReadAt.getTime()) {
-            unreadCount = await this.prisma.client.message.count({
-              where: {
-                channelId: channel.id,
-                createdAt: {
-                  gt: lastReadAt,
-                },
-                userId: { not: userId }, // do not count own messages as unread
-                deletedAt: null,
-              },
-            });
-          }
-        }
-
-        // If reaction is newer and unread
-        if (isReactionNewer && latestReaction && latestReaction.userId !== userId) {
-          if (latestReaction.createdAt.getTime() > lastReadAt.getTime()) {
-            if (unreadCount === 0) {
-              unreadCount = 1;
-            }
-          }
-        }
-
-        // Determine names and avatars based on DM vs Group
-        let name = channel.name;
-        let avatar: string | null = null;
-        let role = '';
-        let statusText = '';
-        let isOnline = false;
-
-        if (channel.type === 'dm') {
-          const otherMember = channel.members.find((member) => member.userId !== userId);
-          if (otherMember && otherMember.user) {
-            name = otherMember.user.name;
-            avatar = otherMember.user.avatarUrl;
-            role = otherMember.user.role || '';
-            isOnline = inMemoryOnlineUsers.has(otherMember.userId);
-            statusText = isOnline ? 'Active now' : 'Offline';
-          }
-        }
-
-        // Get initials for display fallback
-        const initials = name
-          .split(' ')
-          .map((n) => n[0])
-          .join('')
-          .toUpperCase()
-          .slice(0, 2);
-
-        let lastMessage = '';
-        if (lastMessageRecord) {
-          lastMessage = lastMessageRecord.deletedAt ? 'this message was deleted' : lastMessageRecord.content;
-        }
-        let lastMessageTime = lastMessageRecord
-          ? new Date(lastMessageRecord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : '';
-        let lastMessageAtStr = lastMessageRecord
-          ? lastMessageRecord.createdAt.toISOString()
-          : channel.createdAt.toISOString();
-
-        if (isReactionNewer && latestReaction) {
-          if (latestReaction.message.deletedAt) {
-            lastMessage = 'this message was deleted';
-          } else {
-            lastMessage = `Reacted ${latestReaction.emoji} to "${latestReaction.message.content}"`;
-          }
-          lastMessageTime = new Date(latestReaction.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          lastMessageAtStr = latestReaction.createdAt.toISOString();
-        }
-
-        let lastMessageId = lastMessageRecord ? lastMessageRecord.id : undefined;
-
-        let lastSenderId: string | undefined = undefined;
-        if (isReactionNewer && latestReaction) {
-          lastSenderId = latestReaction.userId;
-        } else if (lastMessageRecord) {
-          lastSenderId = lastMessageRecord.userId;
-        }
-
-        return {
-          id: channel.id,
-          name,
-          avatar,
-          initials,
-          role,
-          statusText,
-          type: channel.type === 'dm' ? 'direct' : channel.type === 'group' ? 'group' : 'channel',
-          lastMessage,
-          lastMessageId,
-          lastMessageTime,
-          lastMessageAt: lastMessageAtStr,
-          lastSenderId,
-          unreadCount,
-          isOnline,
-          participants: channel.members.map((member) => ({
-            id: member.userId,
-            name: member.user.name,
-            avatar: member.user.avatarUrl || undefined,
-            initials: member.user.name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2),
-            role: member.user.role || '',
-            isOnline: inMemoryOnlineUsers.has(member.userId),
-          })),
-        };
-      }),
+    const lastReadMap = new Map(
+      lastReadRecords.map((r) => [r.channelId, r.lastReadAt]),
     );
 
+    // 2. Batch fetch all reactions for these channels to get the latest reaction per channel in exactly ONE query
+    const reactions = await this.prisma.client.messageReaction.findMany({
+      where: {
+        message: {
+          channelId: { in: channelIds },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        message: true,
+      },
+    });
+
+    const latestReactionsMap = new Map<string, any>();
+    for (const rx of reactions) {
+      const cid = rx.message.channelId;
+      if (!latestReactionsMap.has(cid)) {
+        latestReactionsMap.set(cid, rx);
+      }
+    }
+    // 3. Batch fetch all messages created after the minimum lastReadAt across all channels to count unread messages in memory
+    const lastReadTimes = Array.from(lastReadMap.values()).map((d) => d.getTime());
+    const minLastReadDate =
+      channelIds.length > 0 && lastReadTimes.length > 0
+        ? new Date(Math.min(...lastReadTimes))
+        : new Date(0);
+
+    const unreadMessages = await this.prisma.client.message.findMany({
+      where: {
+        channelId: { in: channelIds },
+        createdAt: { gt: minLastReadDate },
+        userId: { not: userId },
+        deletedAt: null,
+      },
+      select: {
+        channelId: true,
+        createdAt: true,
+      },
+    });
+
+    const unreadCountMap = new Map<string, number>();
+    for (const msg of unreadMessages) {
+      const lastReadAt = lastReadMap.get(msg.channelId) || new Date(0);
+      if (msg.createdAt.getTime() > lastReadAt.getTime()) {
+        unreadCountMap.set(
+          msg.channelId,
+          (unreadCountMap.get(msg.channelId) || 0) + 1,
+        );
+      }
+    }
+
+    const conversations = filteredMemberships.map((m) => {
+      const channel = m.channel;
+      const lastMessageRecord = channel.messages[0] || null;
+
+      // Use pre-fetched latest reaction
+      const latestReaction = latestReactionsMap.get(channel.id) || null;
+
+      let isReactionNewer = false;
+      if (latestReaction) {
+        if (
+          !lastMessageRecord ||
+          latestReaction.createdAt.getTime() >
+          lastMessageRecord.createdAt.getTime()
+        ) {
+          isReactionNewer = true;
+        }
+      }
+
+      // Pre-fetched unread count check
+      const lastReadAt = lastReadMap.get(channel.id) || new Date(0);
+      let unreadCount = unreadCountMap.get(channel.id) || 0;
+
+      // If reaction is newer and unread
+      if (
+        isReactionNewer &&
+        latestReaction &&
+        latestReaction.userId !== userId
+      ) {
+        if (latestReaction.createdAt.getTime() > lastReadAt.getTime()) {
+          if (unreadCount === 0) {
+            unreadCount = 1;
+          }
+        }
+      }
+
+      // Determine names and avatars based on DM vs Group
+      let name = channel.name;
+      let avatar: string | null = null;
+      let role = '';
+      let statusText = '';
+      let isOnline = false;
+
+      if (channel.type === 'dm') {
+        const otherMember = channel.members.find(
+          (member) => member.userId !== userId,
+        );
+        if (otherMember && otherMember.user) {
+          name = otherMember.user.name;
+          avatar = otherMember.user.avatarUrl;
+          role = otherMember.user.role || '';
+          isOnline = inMemoryOnlineUsers.has(otherMember.userId);
+          statusText = isOnline ? 'Active now' : 'Offline';
+        }
+      }
+
+      // Get initials for display fallback
+      const initials = name
+        .split(' ')
+        .map((n) => n[0])
+        .join('')
+        .toUpperCase()
+        .slice(0, 2);
+
+      let lastMessage = '';
+      if (lastMessageRecord) {
+        const isDeletedForMe = lastMessageRecord.userDeletedMessages && lastMessageRecord.userDeletedMessages.length > 0;
+        lastMessage = (lastMessageRecord.deletedAt || isDeletedForMe) ? 'this message was deleted' : lastMessageRecord.content;
+      }
+      let lastMessageTime = lastMessageRecord
+        ? new Date(lastMessageRecord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : '';
+      let lastMessageAtStr = lastMessageRecord
+        ? lastMessageRecord.createdAt.toISOString()
+        : channel.createdAt.toISOString();
+
+      if (isReactionNewer && latestReaction) {
+        const isMsgDeletedForMe = latestReaction.message.userDeletedMessages && latestReaction.message.userDeletedMessages.length > 0;
+        if (latestReaction.message.deletedAt || isMsgDeletedForMe) {
+          lastMessage = 'this message was deleted';
+        } else {
+          lastMessage = `Reacted ${latestReaction.emoji} to "${latestReaction.message.content}"`;
+        }
+        lastMessageTime = new Date(latestReaction.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        lastMessageAtStr = latestReaction.createdAt.toISOString();
+      }
+
+      const lastMessageId = lastMessageRecord
+        ? lastMessageRecord.id
+        : undefined;
+
+      let lastSenderId: string | undefined = undefined;
+      if (isReactionNewer && latestReaction) {
+        lastSenderId = latestReaction.userId;
+      } else if (lastMessageRecord) {
+        lastSenderId = lastMessageRecord.userId;
+      }
+
+      return {
+        id: channel.id,
+        name,
+        avatar,
+        initials,
+        role,
+        statusText,
+        type:
+          channel.type === 'dm'
+            ? 'direct'
+            : channel.type === 'group'
+              ? 'group'
+              : 'channel',
+        lastMessage,
+        lastMessageId,
+        lastMessageTime,
+        lastMessageAt: lastMessageAtStr,
+        lastSenderId,
+        unreadCount,
+        isOnline,
+        isFavorite: (m as any).isFavorite,
+        participants: channel.members.map((member) => ({
+          id: member.userId,
+          name: member.user.name,
+          avatar: member.user.avatarUrl || undefined,
+          initials: member.user.name
+            .split(' ')
+            .map((n) => n[0])
+            .join('')
+            .toUpperCase()
+            .slice(0, 2),
+          role: member.user.role || '',
+          isOnline: inMemoryOnlineUsers.has(member.userId),
+          roles: member.roles,
+        })),
+      };
+    });
+
     // Sort by latest message or creation time
-    return conversations.sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
+    return conversations.sort((a, b) =>
+      b.lastMessageAt.localeCompare(a.lastMessageAt),
+    );
   }
 
   // Cursor-based message pagination to prevent memory bloating
-  async getMessages(channelId: string, userId: string, cursor?: string, limit = 20) {
+  async getMessages(
+    channelId: string,
+    userId: string,
+    cursor?: string,
+    limit = 20,
+  ) {
     await this.validateMembership(channelId, userId);
 
     const rawMessages = await this.prisma.client.message.findMany({
@@ -601,18 +705,29 @@ export class ChatService {
               select: {
                 id: true,
                 name: true,
+                avatarUrl: true,
               },
             },
+          },
+        },
+        userDeletedMessages: {
+          where: {
+            userId,
           },
         },
       },
     });
 
     const hasMore = rawMessages.length > limit;
-    const messagesToReturn = hasMore ? rawMessages.slice(0, limit) : rawMessages;
+    const messagesToReturn = hasMore
+      ? rawMessages.slice(0, limit)
+      : rawMessages;
 
     // The cursor for the next page is the ID of the oldest message in the set
-    const nextCursor = messagesToReturn.length > 0 ? messagesToReturn[messagesToReturn.length - 1].id : null;
+    const nextCursor =
+      messagesToReturn.length > 0
+        ? messagesToReturn[messagesToReturn.length - 1].id
+        : null;
 
     const formatBytes = (bytes: number) => {
       if (bytes === 0) return '0 Bytes';
@@ -628,7 +743,7 @@ export class ChatService {
         const file = msg.files[0] || null;
 
         // Group reactions by emoji
-        const reactionGroupMap = new Map<string, { emoji: string; count: number; users: string[]; userIds: string[]; hasReacted: boolean }>();
+        const reactionGroupMap = new Map<string, { emoji: string; count: number; users: any[]; userIds: string[]; hasReacted: boolean }>();
         for (const rx of msg.messageReactions || []) {
           const key = rx.emoji;
           if (!reactionGroupMap.has(key)) {
@@ -642,8 +757,11 @@ export class ChatService {
           }
           const group = reactionGroupMap.get(key)!;
           group.count += 1;
-          group.users.push(rx.user.name);
-          group.userIds.push(rx.userId);
+          group.users.push({
+            id: rx.user.id,
+            name: rx.user.name,
+            avatarUrl: rx.user.avatarUrl || undefined,
+          });
           if (rx.userId === userId) {
             group.hasReacted = true;
           }
@@ -655,7 +773,10 @@ export class ChatService {
           senderId: msg.userId,
           senderName: msg.user.name,
           senderAvatar: msg.user.avatarUrl || undefined,
-          timestamp: new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          timestamp: new Date(msg.createdAt).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
           createdAt: msg.createdAt.toISOString(),
           editedAt: msg.editedAt ? msg.editedAt.toISOString() : undefined,
           isSelf: msg.userId === userId,
@@ -667,7 +788,7 @@ export class ChatService {
             size: formatBytes(Number(file.sizeBytes)),
             type: file.mimeType.includes('pdf') ? 'pdf' : file.mimeType.includes('image') ? 'image' : 'other',
           } : undefined,
-          isDeleted: msg.deletedAt !== null,
+          isDeleted: msg.deletedAt !== null || (msg.userDeletedMessages && msg.userDeletedMessages.length > 0),
           isSystem: msg.type === 'system',
         };
       })
@@ -681,7 +802,12 @@ export class ChatService {
   }
 
   // Saves a new message to the database
-  async saveMessage(channelId: string, senderId: string, content: string, parentId?: string) {
+  async saveMessage(
+    channelId: string,
+    senderId: string,
+    content: string,
+    parentId?: string,
+  ) {
     await this.validateMembership(channelId, senderId);
 
     const message = await this.prisma.client.message.create({
@@ -709,24 +835,129 @@ export class ChatService {
     return message;
   }
 
+  // Saves a new voice note message and its corresponding file attachment
+  async uploadVoiceNote(
+    file: any,
+    channelId: string,
+    duration: number,
+    userId: string,
+  ) {
+    await this.validateMembership(channelId, userId);
+
+    // Create directory
+    const uploadDir = join(process.cwd(), 'uploads', 'voice-notes');
+    if (!existsSync(uploadDir)) {
+      mkdirSync(uploadDir, { recursive: true });
+    }
+
+    // Generate filename
+    const cleanMime = file.mimetype.split(';')[0].trim();
+    const ext = cleanMime === 'audio/mp4' || cleanMime === 'audio/aac' ? 'mp4' : 'webm';
+    const filename = `voice-note-${Date.now()}-${Math.random().toString(36).substring(2, 15)}.${ext}`;
+    const filePath = join(uploadDir, filename);
+
+    // Save file
+    writeFileSync(filePath, file.buffer);
+
+    // Generate URL
+    const port = process.env.PORT || 4000;
+    const url = `http://localhost:${port}/chat/voice-notes/${filename}`;
+
+    const contentObj = {
+      type: 'voice_note',
+      url,
+      duration,
+    };
+    const contentJson = JSON.stringify(contentObj);
+
+    // Create Message record with type: file
+    const message = await this.prisma.client.message.create({
+      data: {
+        channelId,
+        userId,
+        content: contentJson,
+        type: 'file',
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
+
+    // Create File record
+    await this.prisma.client.file.create({
+      data: {
+        messageId: message.id,
+        channelId,
+        uploaderId: userId,
+        name: filename,
+        s3Key: filename,
+        cdnUrl: url,
+        mimeType: file.mimetype,
+        sizeBytes: BigInt(file.buffer.length),
+      },
+    });
+
+    // Update the message_reads for the sender automatically
+    await this.updateLastRead(channelId, userId);
+
+    return {
+      message: {
+        id: message.id,
+        text: message.content,
+        senderId: message.userId,
+        senderName: message.user.name,
+        timestamp: new Date(message.createdAt).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        isSelf: true,
+        isPinned: false,
+        isDeleted: false,
+        reactions: [],
+        type: 'file' as const,
+      },
+    };
+  }
+
+
   // Updates the read pointer for the user on a channel
   async updateLastRead(channelId: string, userId: string) {
     await this.validateMembership(channelId, userId);
 
-    const result = await this.prisma.client.messageRead.upsert({
-      where: {
-        userId_channelId: { userId, channelId },
-      },
-      update: {
-        lastReadAt: new Date(),
-      },
-      create: {
-        userId,
-        channelId,
-        lastReadAt: new Date(),
-      },
-    });
-    return result;
+    try {
+      const result = await this.prisma.client.messageRead.upsert({
+        where: {
+          userId_channelId: { userId, channelId },
+        },
+        update: {
+          lastReadAt: new Date(),
+        },
+        create: {
+          userId,
+          channelId,
+          lastReadAt: new Date(),
+        },
+      });
+      return result;
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        return this.prisma.client.messageRead.update({
+          where: {
+            userId_channelId: { userId, channelId },
+          },
+          data: {
+            lastReadAt: new Date(),
+          },
+        });
+      }
+      throw err;
+    }
   }
 
   // --- TASK MANAGEMENT ENDPOINTS ---
@@ -765,7 +996,14 @@ export class ChatService {
   async createTask(
     channelId: string,
     creatorId: string,
-    body: { title: string; priority: string; assignedToEmail?: string; assignedTo?: string; dueDate?: string; sprint?: string },
+    body: {
+      title: string;
+      priority: string;
+      assignedToEmail?: string;
+      assignedTo?: string;
+      dueDate?: string;
+      sprint?: string;
+    },
   ) {
     await this.validateMembership(channelId, creatorId);
 
@@ -850,7 +1088,14 @@ export class ChatService {
   async updateTask(
     taskId: string,
     userId: string,
-    body: { status?: string; title?: string; priority?: string; assignedTo?: string; dueDate?: string | null; sprint?: string | null },
+    body: {
+      status?: string;
+      title?: string;
+      priority?: string;
+      assignedTo?: string;
+      dueDate?: string | null;
+      sprint?: string | null;
+    },
   ) {
     const task = await this.prisma.client.task.findUnique({
       where: { id: taskId },
@@ -866,7 +1111,7 @@ export class ChatService {
     if (body.priority !== undefined) updateData.priority = body.priority;
     if (body.assignedTo !== undefined) updateData.assignedTo = body.assignedTo;
     if (body.dueDate !== undefined) updateData.dueDate = body.dueDate ? new Date(body.dueDate) : null;
-    
+
     if (body.sprint !== undefined) {
       if (body.sprint === null || body.sprint === '') {
         updateData.sprintId = null;
@@ -930,7 +1175,12 @@ export class ChatService {
 
   async createChannel(
     userId: string,
-    body: { name: string; description?: string; type: 'public' | 'private'; memberIds?: string[] },
+    body: {
+      name: string;
+      description?: string;
+      type: 'public' | 'private';
+      memberIds?: string[];
+    },
   ) {
     const workspaceId = await this.ensureDefaultWorkspace(userId);
 
@@ -951,15 +1201,16 @@ export class ChatService {
     });
 
     if (body.memberIds && body.memberIds.length > 0) {
-      const uniqueMemberIds = Array.from(new Set(body.memberIds.filter(id => id !== userId)));
-      if (uniqueMemberIds.length > 0) {
-        await this.prisma.client.channelMember.createMany({
-          data: uniqueMemberIds.map((memberId) => ({
-            channelId: channel.id,
-            userId: memberId,
-            role: 'member',
-          })),
-          skipDuplicates: true,
+      const uniqueMemberIds = Array.from(
+        new Set(body.memberIds.filter((id) => id !== userId)),
+      );
+      for (const memberId of uniqueMemberIds) {
+        await this.prisma.client.channelMember.upsert({
+          where: {
+            channelId_userId: { channelId: channel.id, userId: memberId },
+          },
+          update: {},
+          create: { channelId: channel.id, userId: memberId, role: 'member' },
         });
       }
     }
@@ -976,7 +1227,10 @@ export class ChatService {
     });
   }
 
-  async createGroupChat(userId: string, body: { name: string; memberIds: string[] }) {
+  async createGroupChat(
+    userId: string,
+    body: { name: string; memberIds: string[] },
+  ) {
     const workspaceId = await this.ensureDefaultWorkspace(userId);
 
     const channel = await this.prisma.client.channel.create({
@@ -994,15 +1248,16 @@ export class ChatService {
       },
     });
 
-    const uniqueMemberIds = Array.from(new Set(body.memberIds.filter(id => id !== userId)));
-    if (uniqueMemberIds.length > 0) {
-      await this.prisma.client.channelMember.createMany({
-        data: uniqueMemberIds.map((memberId) => ({
-          channelId: channel.id,
-          userId: memberId,
-          role: 'member',
-        })),
-        skipDuplicates: true,
+    const uniqueMemberIds = Array.from(
+      new Set(body.memberIds.filter((id) => id !== userId)),
+    );
+    for (const memberId of uniqueMemberIds) {
+      await this.prisma.client.channelMember.upsert({
+        where: {
+          channelId_userId: { channelId: channel.id, userId: memberId },
+        },
+        update: {},
+        create: { channelId: channel.id, userId: memberId, role: 'member' },
       });
     }
 
@@ -1018,7 +1273,11 @@ export class ChatService {
     });
   }
 
-  async addMembersToChannel(userId: string, channelId: string, memberIds: string[]) {
+  async addMembersToChannel(
+    userId: string,
+    channelId: string,
+    memberIds: string[],
+  ) {
     const channel = await this.prisma.client.channel.findUnique({
       where: { id: channelId },
     });
@@ -1031,14 +1290,11 @@ export class ChatService {
     const uniqueMemberIds = Array.from(new Set(memberIds));
     let systemMessage: any = null;
 
-    if (uniqueMemberIds.length > 0) {
-      await this.prisma.client.channelMember.createMany({
-        data: uniqueMemberIds.map((id) => ({
-          channelId,
-          userId: id,
-          role: 'member',
-        })),
-        skipDuplicates: true,
+    for (const id of uniqueMemberIds) {
+      await this.prisma.client.channelMember.upsert({
+        where: { channelId_userId: { channelId, userId: id } },
+        update: {},
+        create: { channelId, userId: id, role: 'member' },
       });
 
       try {
@@ -1112,7 +1368,11 @@ export class ChatService {
     return updated;
   }
 
-  async toggleMessageReaction(messageId: string, userId: string, emoji: string) {
+  async toggleMessageReaction(
+    messageId: string,
+    userId: string,
+    emoji: string,
+  ) {
     const message = await this.prisma.client.message.findUnique({
       where: { id: messageId },
     });
@@ -1156,13 +1416,15 @@ export class ChatService {
       include: {
         user: {
           select: {
+            id: true,
             name: true,
+            avatarUrl: true,
           },
         },
       },
     });
 
-    const reactionGroupMap = new Map<string, { emoji: string; count: number; users: string[]; userIds: string[]; hasReacted: boolean }>();
+    const reactionGroupMap = new Map<string, { emoji: string; count: number; users: any[]; userIds: string[]; hasReacted: boolean }>();
     for (const rx of allReactions) {
       const key = rx.emoji;
       if (!reactionGroupMap.has(key)) {
@@ -1176,7 +1438,11 @@ export class ChatService {
       }
       const group = reactionGroupMap.get(key)!;
       group.count += 1;
-      group.users.push(rx.user.name);
+      group.users.push({
+        id: rx.user.id,
+        name: rx.user.name,
+        avatarUrl: rx.user.avatarUrl || undefined,
+      });
       group.userIds.push(rx.userId);
       if (rx.userId === userId) {
         group.hasReacted = true;
@@ -1185,11 +1451,13 @@ export class ChatService {
 
     return {
       channelId: message.channelId,
-      reactions: Array.from(reactionGroupMap.values()).sort((a, b) => a.emoji.localeCompare(b.emoji)),
+      reactions: Array.from(reactionGroupMap.values()).sort((a, b) =>
+        a.emoji.localeCompare(b.emoji),
+      ),
     };
   }
 
-  async deleteMessage(messageId: string, userId: string) {
+  async deleteMessage(messageId: string, userId: string, deleteForEveryone = false) {
     const message = await this.prisma.client.message.findUnique({
       where: { id: messageId },
       include: { channel: true },
@@ -1199,20 +1467,33 @@ export class ChatService {
     }
     await this.validateMembership(message.channelId, userId);
 
-    if (message.channel.type === 'dm') {
-      throw new ForbiddenException('Delete for Me is handled on the client for one-to-one chats');
+    const isOwnMessage = message.userId === userId;
+
+    if (deleteForEveryone && isOwnMessage) {
+      const updated = await this.prisma.client.message.update({
+        where: { id: messageId },
+        data: { deletedAt: new Date(), isPinned: false },
+      });
+      return updated;
     }
 
-    if (message.userId !== userId) {
-      throw new ForbiddenException('You can only delete your own messages');
-    }
-
-    const updated = await this.prisma.client.message.update({
-      where: { id: messageId },
-      data: { deletedAt: new Date(), isPinned: false },
+    await this.prisma.client.userDeletedMessage.upsert({
+      where: {
+        userId_messageId: {
+          userId,
+          messageId,
+        },
+      },
+      create: {
+        userId,
+        messageId,
+      },
+      update: {},
     });
-
-    return updated;
+    return {
+      ...message,
+      isDeleteForMeOnly: true,
+    };
   }
 
   async editMessage(messageId: string, content: string, userId: string) {
@@ -1326,7 +1607,8 @@ export class ChatService {
     return projects.map((p) => {
       const totalTasks = p.tasks.length;
       const completedTasks = p.tasks.filter((t) => t.status === 'done').length;
-      const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+      const progress =
+        totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
       const members = p.channel
         ? p.channel.members.map((m) => ({
@@ -1334,6 +1616,7 @@ export class ChatService {
           name: m.user.name,
           email: m.user.email,
           avatarUrl: m.user.avatarUrl,
+          roles: m.roles,
         }))
         : [];
 
@@ -1364,7 +1647,13 @@ export class ChatService {
 
   async createProject(
     userId: string,
-    body: { name: string; description?: string; dueDate?: string; securityLevel?: string; invitedEmails?: string[] },
+    body: {
+      name: string;
+      description?: string;
+      dueDate?: string;
+      securityLevel?: string;
+      invitedEmails?: string[];
+    },
   ) {
     const workspaceId = await this.ensureDefaultWorkspace(userId);
 
@@ -1385,7 +1674,8 @@ export class ChatService {
       data: {
         workspaceId,
         name: channelName,
-        description: body.description || `Discussion channel for project ${body.name}`,
+        description:
+          body.description || `Discussion channel for project ${body.name}`,
         type: 'private',
         createdBy: userId,
         members: {
@@ -1445,6 +1735,7 @@ export class ChatService {
         name: m.user.name,
         email: m.user.email,
         avatarUrl: m.user.avatarUrl,
+        roles: m.roles,
       })),
       channelId: project.channelId,
       creator: project.creator,
@@ -1454,7 +1745,13 @@ export class ChatService {
   async updateProject(
     projectId: string,
     userId: string,
-    body: { name?: string; description?: string; dueDate?: string; securityLevel?: string; status?: 'active' | 'archived' },
+    body: {
+      name?: string;
+      description?: string;
+      dueDate?: string;
+      securityLevel?: string;
+      status?: 'active' | 'archived';
+    },
   ) {
     const project = await this.prisma.client.project.findUnique({
       where: { id: projectId },
@@ -1483,9 +1780,12 @@ export class ChatService {
 
     const updateData: any = {};
     if (body.name !== undefined) updateData.name = body.name;
-    if (body.description !== undefined) updateData.description = body.description;
-    if (body.dueDate !== undefined) updateData.dueDate = body.dueDate ? new Date(body.dueDate) : null;
-    if (body.securityLevel !== undefined) updateData.securityLevel = body.securityLevel;
+    if (body.description !== undefined)
+      updateData.description = body.description;
+    if (body.dueDate !== undefined)
+      updateData.dueDate = body.dueDate ? new Date(body.dueDate) : null;
+    if (body.securityLevel !== undefined)
+      updateData.securityLevel = body.securityLevel;
     if (body.status !== undefined) updateData.status = body.status;
 
     const updated = await this.prisma.client.project.update({
@@ -1527,8 +1827,11 @@ export class ChatService {
     });
 
     const totalTasks = updated.tasks.length;
-    const completedTasks = updated.tasks.filter((t) => t.status === 'done').length;
-    const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    const completedTasks = updated.tasks.filter(
+      (t) => t.status === 'done',
+    ).length;
+    const progress =
+      totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
     const members = updated.channel
       ? updated.channel.members.map((m) => ({
@@ -1536,6 +1839,7 @@ export class ChatService {
         name: m.user.name,
         email: m.user.email,
         avatarUrl: m.user.avatarUrl,
+        roles: m.roles,
       }))
       : [];
 
@@ -1567,7 +1871,9 @@ export class ChatService {
     }
 
     if (project.createdBy !== userId) {
-      throw new ForbiddenException('Only the creator of this project can delete it');
+      throw new ForbiddenException(
+        'Only the creator of this project can delete it',
+      );
     }
 
     await this.prisma.client.project.delete({
@@ -1575,11 +1881,13 @@ export class ChatService {
     });
 
     if (project.channelId) {
-      await this.prisma.client.channel.delete({
-        where: { id: project.channelId },
-      }).catch((err) => {
-        console.error('Failed to delete channel for project', err);
-      });
+      await this.prisma.client.channel
+        .delete({
+          where: { id: project.channelId },
+        })
+        .catch((err) => {
+          console.error('Failed to delete channel for project', err);
+        });
     }
 
     return { success: true };
@@ -1677,7 +1985,12 @@ export class ChatService {
     };
   }
 
-  async removeProjectMember(projectId: string, memberId: string, currentUserId: string) {
+
+  async removeProjectMember(
+    projectId: string,
+    memberId: string,
+    currentUserId: string,
+  ) {
     const project = await this.prisma.client.project.findUnique({
       where: { id: projectId },
     });
@@ -1704,7 +2017,9 @@ export class ChatService {
     const isChannelAdmin = channelMember?.role === 'admin';
 
     if (!isCreator && !isChannelAdmin) {
-      throw new ForbiddenException('You do not have permission to remove members from this project');
+      throw new ForbiddenException(
+        'You do not have permission to remove members from this project',
+      );
     }
 
     // Verify target user is actually a member of the project's channel
@@ -1768,12 +2083,14 @@ export class ChatService {
         });
       }
     } catch (err) {
-      console.error('Failed to create system message for removed project member', err);
+      console.error(
+        'Failed to create system message for removed project member',
+        err,
+      );
     }
 
     return { success: true, channelId: project.channelId, systemMessage };
   }
-
 
   async deleteTask(taskId: string, userId: string) {
     const task = await this.prisma.client.task.findUnique({
@@ -2081,5 +2398,50 @@ export class ChatService {
       },
     });
   }
-}
 
+  async toggleFavorite(channelId: string, userId: string): Promise<{ isFavorite: boolean }> {
+    const membership = await this.prisma.client.channelMember.findUnique({
+      where: { channelId_userId: { channelId, userId } },
+    }) as any;
+    if (!membership) {
+      throw new Error('You are not a member of this channel');
+    }
+    const updated = await (this.prisma.client.channelMember.update as any)({
+      where: { channelId_userId: { channelId, userId } },
+      data: { isFavorite: !membership.isFavorite },
+    });
+    return { isFavorite: updated.isFavorite };
+  }
+
+  async updateProjectMemberRoles(
+    projectId: string,
+    memberId: string,
+    roles: any[],
+    userId: string,
+  ) {
+    const project = await this.prisma.client.project.findUnique({
+      where: { id: projectId },
+      select: { channelId: true, createdBy: true },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+    if (!project.channelId) {
+      throw new BadRequestException('Project has no associated channel');
+    }
+
+    const updatedMember = await this.prisma.client.channelMember.update({
+      where: {
+        channelId_userId: {
+          channelId: project.channelId,
+          userId: memberId,
+        },
+      },
+      data: {
+        roles: roles,
+      },
+    });
+
+    return updatedMember;
+  }
+}

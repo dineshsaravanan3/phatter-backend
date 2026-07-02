@@ -98,6 +98,7 @@ model User {
   messageReads       MessageRead[]
   scheduledMessages  ScheduledMessage[]
   aiChatMessages     AiChatMessage[]
+  userDeletedMessages UserDeletedMessage[]
 
   @@map("users")
 }
@@ -143,11 +144,13 @@ model Channel {
 }
 
 model ChannelMember {
-  id        String            @id @default(uuid()) @db.VarChar(36)
-  channelId String            @map("channel_id") @db.VarChar(36)
-  userId    String            @map("user_id") @db.VarChar(36)
-  role      ChannelMemberRole
-  joinedAt  DateTime          @default(now()) @map("joined_at") @db.DateTime(0)
+  id         String            @id @default(uuid()) @db.VarChar(36)
+  channelId  String            @map("channel_id") @db.VarChar(36)
+  userId     String            @map("user_id") @db.VarChar(36)
+  role       ChannelMemberRole
+  isFavorite Boolean           @default(false) @map("is_favorite")
+  roles      Json?             @map("roles")
+  joinedAt   DateTime          @default(now()) @map("joined_at") @db.DateTime(0)
 
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -174,6 +177,7 @@ model Message {
   replies          Message[]         @relation("MessageThreads")
   messageReactions MessageReaction[]
   files            File[]
+  userDeletedMessages UserDeletedMessage[]
 
   @@map("messages")
 }
@@ -287,7 +291,6 @@ model Project {
   creator   User      @relation(fields: [createdBy], references: [id])
   tasks     Task[]
   sprints   Sprint[]
-
   @@map("projects")
 }
 
@@ -401,5 +404,18 @@ model AiChatMessage {
 
   @@index([userId])
   @@map("ai_chat_messages")
+}
+
+model UserDeletedMessage {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  userId    String   @map("user_id") @db.VarChar(36)
+  messageId String   @map("message_id") @db.VarChar(36)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(0)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, messageId])
+  @@map("user_deleted_messages")
 }
 

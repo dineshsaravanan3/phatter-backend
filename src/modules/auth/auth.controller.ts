@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Req, Res, UseGuards, UnauthorizedException, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, Req, Res, UseGuards, UnauthorizedException, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -6,7 +6,13 @@ import { RegisterDto } from './dto/register.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { JwtAuthGuard } from './jwt.guard';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiHeader,
+} from '@nestjs/swagger';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -33,7 +39,11 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Invalid data' })
   @ApiResponse({ status: 409, description: 'Email already exists' })
   async register(@Body() registerDto: RegisterDto) {
-    return this.authService.register(registerDto.name, registerDto.email, registerDto.password);
+    return this.authService.register(
+      registerDto.name,
+      registerDto.email,
+      registerDto.password,
+    );
   }
 
   @UseGuards(ThrottlerGuard)
@@ -41,7 +51,11 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'User login' })
-  @ApiHeader({ name: 'x-client-type', required: false, description: 'Client type: web, mobile, or electron' })
+  @ApiHeader({
+    name: 'x-client-type',
+    required: false,
+    description: 'Client type: web, mobile, or electron',
+  })
   @ApiResponse({ status: 200, description: 'Login successful' })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
   async login(
@@ -49,20 +63,37 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const user = await this.authService.validateUser(loginDto.email, loginDto.password);
+    const user = await this.authService.validateUser(
+      loginDto.email,
+      loginDto.password,
+    );
     if (!user) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
     const rawClientType = req.headers['x-client-type'];
-    const clientType = typeof rawClientType === 'string' ? rawClientType.toLowerCase() : undefined;
-    const validatedClientType = ['mobile', 'electron'].includes(clientType || '') ? clientType : 'web';
+    const clientType =
+      typeof rawClientType === 'string'
+        ? rawClientType.toLowerCase()
+        : undefined;
+    const validatedClientType = ['mobile', 'electron'].includes(
+      clientType || '',
+    )
+      ? clientType
+      : 'web';
 
-    const result = await this.authService.login(user, validatedClientType === 'web' ? undefined : req.body.deviceId);
+    const result = await this.authService.login(
+      user,
+      validatedClientType === 'web' ? undefined : req.body.deviceId,
+    );
 
     // For web client, set cookie and omit refresh token from body
     if (validatedClientType === 'web') {
-      res.cookie('refresh_token', result.refreshToken, this.getCookieOptions(req));
+      res.cookie(
+        'refresh_token',
+        result.refreshToken,
+        this.getCookieOptions(req),
+      );
       return {
         user: result.user,
         accessToken: result.accessToken,
@@ -82,7 +113,11 @@ export class AuthController {
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Logout and revoke current active session' })
-  @ApiHeader({ name: 'x-client-type', required: false, description: 'Client type: web, mobile, or electron' })
+  @ApiHeader({
+    name: 'x-client-type',
+    required: false,
+    description: 'Client type: web, mobile, or electron',
+  })
   @ApiResponse({ status: 200, description: 'Logged out successfully' })
   async logout(
     @Body() refreshDto: RefreshDto,
@@ -90,8 +125,15 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const rawClientType = req.headers['x-client-type'];
-    const clientType = typeof rawClientType === 'string' ? rawClientType.toLowerCase() : undefined;
-    const validatedClientType = ['mobile', 'electron'].includes(clientType || '') ? clientType : 'web';
+    const clientType =
+      typeof rawClientType === 'string'
+        ? rawClientType.toLowerCase()
+        : undefined;
+    const validatedClientType = ['mobile', 'electron'].includes(
+      clientType || '',
+    )
+      ? clientType
+      : 'web';
 
     let refreshToken = refreshDto.refreshToken;
 
@@ -112,17 +154,31 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh authentication tokens' })
-  @ApiHeader({ name: 'x-client-type', required: false, description: 'Client type: web, mobile, or electron' })
+  @ApiHeader({
+    name: 'x-client-type',
+    required: false,
+    description: 'Client type: web, mobile, or electron',
+  })
   @ApiResponse({ status: 200, description: 'Tokens successfully refreshed' })
-  @ApiResponse({ status: 401, description: 'Invalid refresh token or token reuse detected' })
+  @ApiResponse({
+    status: 401,
+    description: 'Invalid refresh token or token reuse detected',
+  })
   async refresh(
     @Body() refreshDto: RefreshDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
     const rawClientType = req.headers['x-client-type'];
-    const clientType = typeof rawClientType === 'string' ? rawClientType.toLowerCase() : undefined;
-    const validatedClientType = ['mobile', 'electron'].includes(clientType || '') ? clientType : 'web';
+    const clientType =
+      typeof rawClientType === 'string'
+        ? rawClientType.toLowerCase()
+        : undefined;
+    const validatedClientType = ['mobile', 'electron'].includes(
+      clientType || '',
+    )
+      ? clientType
+      : 'web';
 
     let refreshToken = refreshDto.refreshToken;
 
@@ -139,11 +195,18 @@ export class AuthController {
     }
 
     try {
-      const result = await this.authService.refresh(refreshToken, refreshDto.deviceId);
+      const result = await this.authService.refresh(
+        refreshToken,
+        refreshDto.deviceId,
+      );
 
       // Web response: set cookie, omit token from body
       if (validatedClientType === 'web') {
-        res.cookie('refresh_token', result.refreshToken, this.getCookieOptions(req));
+        res.cookie(
+          'refresh_token',
+          result.refreshToken,
+          this.getCookieOptions(req),
+        );
         return {
           user: result.user,
           accessToken: result.accessToken,
@@ -175,5 +238,23 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async me(@Req() req: any) {
     return { user: req.user };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('profile')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update current user display name' })
+  @ApiResponse({ status: 200, description: 'Profile updated successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid name' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async updateProfile(
+    @Req() req: any,
+    @Body() body: { name: string },
+  ) {
+    if (!body?.name?.trim()) {
+      throw new BadRequestException('Name is required');
+    }
+    const updated = await this.authService.updateProfile(req.user.id, body.name);
+    return { user: updated };
   }
 }

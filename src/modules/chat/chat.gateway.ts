@@ -68,7 +68,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleConnection(client: Socket) {
     try {
       // 1. Extract Token from handshake auth or query or headers
-      let token = client.handshake.auth?.token || client.handshake.headers?.authorization;
+      let token =
+        client.handshake.auth?.token || client.handshake.headers?.authorization;
       if (!token && client.handshake.query?.token) {
         token = client.handshake.query.token as string;
       }
@@ -82,7 +83,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       // 2. Validate Token
-      const secret = this.configService.get<string>('JWT_SECRET', 'dci-platform-super-secret-key-12345');
+      const secret = this.configService.get<string>(
+        'JWT_SECRET',
+        'dci-platform-super-secret-key-12345',
+      );
       const payload = this.jwtService.verify(token, { secret });
 
       if (!payload || !payload.sub) {
@@ -126,7 +130,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       console.log(`Socket client connected: ${client.id} (user: ${userId})`);
     } catch (err: any) {
-      console.log(`Socket connection rejected: ${client.id} - Reason: ${err.message}`);
+      console.log(
+        `Socket connection rejected: ${client.id} - Reason: ${err.message}`,
+      );
       client.emit('error', { message: 'Unauthorized connection' });
       client.disconnect(true);
     }
@@ -163,10 +169,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (!hasOnlineSocket) {
           // All tabs closed or idle: user is now offline
           const lastSeenAt = new Date();
-          await this.prisma.client.user.update({
-            where: { id: userId },
-            data: { lastSeenAt },
-          }).catch((err) => console.error('Failed to update last seen', err));
+          await this.prisma.client.user
+            .update({
+              where: { id: userId },
+              data: { lastSeenAt },
+            })
+            .catch((err) => console.error('Failed to update last seen', err));
 
           this.server.emit('user:status_change', {
             userId,
@@ -193,7 +201,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       await this.chatService.validateMembership(data.channelId, userId);
 
       await client.join(`channel:${data.channelId}`);
-      console.log(`Socket ${client.id} joined channel room: channel:${data.channelId}`);
+      console.log(
+        `Socket ${client.id} joined channel room: channel:${data.channelId}`,
+      );
       client.emit('joined_channel', { channelId: data.channelId });
     } catch (err) {
       client.emit('error', { message: 'Forbidden room subscription' });
@@ -287,7 +297,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   // Helper method to broadcast newly created messages to active room members
-  async broadcastNewMessage(channelId: string, message: any, tempId?: string) {
+  async broadcastNewMessage(channelId: string, message: any, tempId?: string, mentionedUserIds?: string[]) {
     try {
       const [members, channel] = await Promise.all([
         this.prisma.client.channelMember.findMany({
@@ -302,15 +312,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       const channelName = channel && channel.type !== 'dm' ? channel.name : undefined;
 
-      for (const member of members) {
-        this.server.to(`user:${member.userId}`).emit('new_message', {
+      const recipientIds = new Set<string>();
+      members.forEach(member => recipientIds.add(member.userId));
+      if (mentionedUserIds && Array.isArray(mentionedUserIds)) {
+        mentionedUserIds.forEach(id => recipientIds.add(id));
+      }
+
+      for (const userId of recipientIds) {
+        this.server.to(`user:${userId}`).emit('new_message', {
           ...message,
           tempId,
         });
 
         // Send toast notification to recipients who are not the sender
-        if (member.userId !== message.senderId) {
-          this.server.to(`user:${member.userId}`).emit('notification:new', {
+        if (userId !== message.senderId) {
+          this.server.to(`user:${userId}`).emit('notification:new', {
             type: 'message',
             channelId,
             channelName,
@@ -323,7 +339,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
       }
     } catch (err) {
-      console.error('Failed to broadcast message to individual user rooms, falling back to channel room', err);
+      console.error(
+        'Failed to broadcast message to individual user rooms, falling back to channel room',
+        err,
+      );
       this.server.to(`channel:${channelId}`).emit('new_message', {
         ...message,
         tempId,
@@ -338,7 +357,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       isPinned,
     });
   }
-  async broadcastMessageReaction(channelId: string, messageId: string, reactions: any) {
+  async broadcastMessageReaction(
+    channelId: string,
+    messageId: string,
+    reactions: any,
+  ) {
     try {
       const members = await this.prisma.client.channelMember.findMany({
         where: { channelId },
@@ -352,25 +375,29 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         },
       });
 
-      const latestReaction = await this.prisma.client.messageReaction.findFirst({
-        where: { messageId },
-        orderBy: { createdAt: 'desc' },
-        include: {
-          user: { select: { id: true, name: true } },
+      const latestReaction = await this.prisma.client.messageReaction.findFirst(
+        {
+          where: { messageId },
+          orderBy: { createdAt: 'desc' },
+          include: {
+            user: { select: { id: true, name: true } },
+          },
         },
-      });
+      );
 
       if (message && latestReaction) {
         for (const member of members) {
-          this.server.to(`user:${member.userId}`).emit('message:reaction_notification', {
-            channelId,
-            messageId,
-            emoji: latestReaction.emoji,
-            reactorName: latestReaction.user.name,
-            reactorId: latestReaction.user.id,
-            messageContent: message.content,
-            createdAt: latestReaction.createdAt.toISOString(),
-          });
+          this.server
+            .to(`user:${member.userId}`)
+            .emit('message:reaction_notification', {
+              channelId,
+              messageId,
+              emoji: latestReaction.emoji,
+              reactorName: latestReaction.user.name,
+              reactorId: latestReaction.user.id,
+              messageContent: message.content,
+              createdAt: latestReaction.createdAt.toISOString(),
+            });
         }
       }
     } catch (err) {
@@ -400,6 +427,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   broadcastMessageDeletion(channelId: string, messageId: string) {
     this.server.to(`channel:${channelId}`).emit('message:delete', {
+      channelId,
+      messageId,
+    });
+  }
+
+  broadcastMessageDeletionToUser(userId: string, channelId: string, messageId: string) {
+    this.server.to(`user:${userId}`).emit('message:delete', {
       channelId,
       messageId,
     });

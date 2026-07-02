@@ -1,11 +1,18 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  ConflictException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
-import { AuthResponse, AuthUserResponse } from './interfaces/auth-response.interface';
+import {
+  AuthResponse,
+  AuthUserResponse,
+} from './interfaces/auth-response.interface';
 
 @Injectable()
 export class AuthService {
@@ -17,8 +24,14 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
   ) {
-    this.jwtSecret = this.configService.get<string>('JWT_SECRET', 'dci-platform-super-secret-key-12345');
-    this.jwtRefreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET', 'dci-platform-another-super-secret-key-67890');
+    this.jwtSecret = this.configService.get<string>(
+      'JWT_SECRET',
+      'dci-platform-super-secret-key-12345',
+    );
+    this.jwtRefreshSecret = this.configService.get<string>(
+      'JWT_REFRESH_SECRET',
+      'dci-platform-another-super-secret-key-67890',
+    );
   }
 
   // Hash a token using SHA-256 for deterministic indexed database lookup
@@ -38,7 +51,10 @@ export class AuthService {
     return null;
   }
 
-  async login(user: any, deviceId?: string): Promise<AuthResponse & { refreshToken: string }> {
+  async login(
+    user: any,
+    deviceId?: string,
+  ): Promise<AuthResponse & { refreshToken: string }> {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
@@ -47,7 +63,8 @@ export class AuthService {
 
     // Access Token: 15 minutes (900 seconds)
     const accessTokenExpiresInSeconds = 900;
-    const accessTokenExpiresAt = Math.floor(Date.now() / 1000) + accessTokenExpiresInSeconds;
+    const accessTokenExpiresAt =
+      Math.floor(Date.now() / 1000) + accessTokenExpiresInSeconds;
 
     const accessToken = await this.jwtService.signAsync(payload, {
       secret: this.jwtSecret,
@@ -57,7 +74,9 @@ export class AuthService {
     // Refresh Token: 30 days
     const refreshTokenExpiresInDays = 30;
     const refreshTokenExpiresAt = new Date();
-    refreshTokenExpiresAt.setDate(refreshTokenExpiresAt.getDate() + refreshTokenExpiresInDays);
+    refreshTokenExpiresAt.setDate(
+      refreshTokenExpiresAt.getDate() + refreshTokenExpiresInDays,
+    );
 
     const refreshToken = await this.jwtService.signAsync(
       { sub: user.id, deviceId },
@@ -103,7 +122,10 @@ export class AuthService {
     });
   }
 
-  async refresh(refreshToken: string, deviceId?: string): Promise<AuthResponse & { refreshToken: string }> {
+  async refresh(
+    refreshToken: string,
+    deviceId?: string,
+  ): Promise<AuthResponse & { refreshToken: string }> {
     const tokenHash = this.hashToken(refreshToken);
 
     // Look up the refresh token in the database
@@ -151,7 +173,8 @@ export class AuthService {
     };
 
     const accessTokenExpiresInSeconds = 900;
-    const accessTokenExpiresAt = Math.floor(Date.now() / 1000) + accessTokenExpiresInSeconds;
+    const accessTokenExpiresAt =
+      Math.floor(Date.now() / 1000) + accessTokenExpiresInSeconds;
 
     const accessToken = await this.jwtService.signAsync(payload, {
       secret: this.jwtSecret,
@@ -160,7 +183,9 @@ export class AuthService {
 
     const refreshTokenExpiresInDays = 30;
     const newRefreshTokenExpiresAt = new Date();
-    newRefreshTokenExpiresAt.setDate(newRefreshTokenExpiresAt.getDate() + refreshTokenExpiresInDays);
+    newRefreshTokenExpiresAt.setDate(
+      newRefreshTokenExpiresAt.getDate() + refreshTokenExpiresInDays,
+    );
 
     const newRefreshToken = await this.jwtService.signAsync(
       { sub: user.id, deviceId: deviceId || dbToken.deviceId },
@@ -215,7 +240,11 @@ export class AuthService {
     };
   }
 
-  async register(name: string, email: string, pass: string): Promise<AuthUserResponse> {
+  async register(
+    name: string,
+    email: string,
+    pass: string,
+  ): Promise<AuthUserResponse> {
     const existingUser = await this.prisma.client.user.findUnique({
       where: { email },
     });
@@ -236,6 +265,24 @@ export class AuthService {
       },
     });
 
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      avatarUrl: user.avatarUrl,
+    };
+  }
+
+  async updateProfile(userId: string, name: string): Promise<AuthUserResponse> {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      throw new Error('Name cannot be empty');
+    }
+    const user = await this.prisma.client.user.update({
+      where: { id: userId },
+      data: { name: trimmedName },
+    });
     return {
       id: user.id,
       name: user.name,

@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ChatService } from '../chat/chat.service';
 import { ToolRegistryService, ExecutionContext } from './tool-registry.service';
@@ -9,7 +9,7 @@ export class AiService {
     private readonly prisma: PrismaService,
     private readonly toolRegistry: ToolRegistryService,
     private readonly chatService: ChatService,
-  ) {}
+  ) { }
 
   getInitialQuestion() {
     return {
@@ -23,6 +23,142 @@ export class AiService {
       where: { userId },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  // ── Voice Transcription (osmAPI Whisper-compatible) ──────────────────────
+  async transcribeAudio(
+    file: any,
+    userId?: string,
+  ): Promise<{ transcript: string }> {
+    const osmApiKey = process.env.OSM_API_KEY;
+
+    if (!osmApiKey) {
+      throw new InternalServerErrorException(
+        'AI service is not configured. Please contact the administrator.',
+      );
+    }
+
+    try {
+      // Build multipart form — native FormData works in Node 18+
+      const formData = new FormData();
+
+      let filename = file.originalname || 'recording.webm';
+      let mimetype = file.mimetype || 'audio/webm';
+
+      // Extract base mimetype (remove any ;codecs=... parameters)
+      if (mimetype.includes(';')) {
+        mimetype = mimetype.split(';')[0].trim();
+      }
+
+      // Map clean mimetype based on file extension
+      if (filename.endsWith('.webm')) {
+        mimetype = 'audio/webm';
+      } else if (filename.endsWith('.mp4')) {
+        mimetype = 'audio/mp4';
+      } else if (mimetype.startsWith('video/')) {
+        mimetype = mimetype.replace('video/', 'audio/');
+      }
+
+      // Convert buffer → Blob for FormData
+      const audioBlob = new Blob([new Uint8Array(file.buffer)], {
+        type: mimetype,
+      });
+
+      formData.append('file', audioBlob, filename);
+      formData.append('model', 'gpt-4o-transcribe');
+      formData.append('response_format', 'text');
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+
+      let response;
+      try {
+        response = await globalThis.fetch(
+          'https://api.osmapi.com/v1/audio/transcriptions',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${osmApiKey}`,
+              // ⚠️ Do NOT set Content-Type manually — fetch sets it with boundary
+            },
+            body: formData,
+            signal: controller.signal,
+          },
+        );
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(
+          `osmAPI transcription error: ${response.status} - ${errText}`,
+        );
+
+        let errorMsg = 'Transcription failed. Please try again later.';
+        try {
+          const parsed = JSON.parse(errText);
+          if (parsed && typeof parsed === 'object') {
+            if (typeof parsed.message === 'string') {
+              errorMsg = parsed.message;
+              if (errorMsg.includes('Transcription provider error:')) {
+                const nestedJsonStr = errorMsg.replace('Transcription provider error:', '').trim();
+                const nestedParsed = JSON.parse(nestedJsonStr);
+                if (nestedParsed?.error?.message) {
+                  errorMsg = nestedParsed.error.message;
+                }
+              }
+            } else if (parsed.error && typeof parsed.error === 'object' && typeof parsed.error.message === 'string') {
+              errorMsg = parsed.error.message;
+            }
+          }
+        } catch (e) {
+          // ignore parsing error
+        }
+
+        if (response.status === 400) {
+          throw new BadRequestException(errorMsg);
+        } else {
+          throw new InternalServerErrorException(errorMsg);
+        }
+      }
+
+      // osmAPI returns plain text when response_format is 'text'
+      const transcript = await response.text();
+      let cleanTranscript = transcript.trim();
+
+      // Remove common Whisper silence/noise hallucinations
+      const hallucinations = [
+        '시청해 주셔서 감사합니다.',
+        '시청해 주셔서 감사합니다',
+        'Subtitles by',
+        'Thank you for watching',
+        'Please subscribe',
+        'thank you for watching',
+        'chuyển ngữ bởi',
+      ];
+
+      for (const hallucination of hallucinations) {
+        const regex = new RegExp(hallucination, 'gi');
+        cleanTranscript = cleanTranscript.replace(regex, '');
+      }
+
+      // Remove any double spaces/dangling punctuation left after removal
+      cleanTranscript = cleanTranscript.replace(/\s+/g, ' ').trim();
+
+      return { transcript: cleanTranscript };
+    } catch (error: any) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof InternalServerErrorException
+      ) {
+        throw error;
+      }
+      console.error('Transcription error:', error);
+      throw new InternalServerErrorException(
+        `Transcription error: ${error.message || error}`,
+      );
+    }
   }
 
   async clearChatHistory(userId: string) {
@@ -121,7 +257,7 @@ export class AiService {
   async handleUserReply(index: number, reply: string, userId?: string, timezone?: string) {
     if (!userId) {
       return {
-        message: "You must be authenticated to talk to the AI assistant.",
+        message: 'You must be authenticated to talk to the AI assistant.',
         nextQuestionIndex: index,
       };
     }
